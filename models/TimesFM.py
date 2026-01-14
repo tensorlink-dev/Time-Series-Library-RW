@@ -3,10 +3,15 @@ from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-from transformers import GPT2Config, GPT2Model
+
+try:
+    from transformers import GPT2Config, GPT2Model
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
 
 
-class Model(nn.Module):
+class _Model(nn.Module):
     def __init__(self, configs):
         """
         TimesFM is a decoder-only foundation model for time series.
@@ -58,3 +63,7 @@ class Model(nn.Module):
             dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
             return dec_out
         return None
+
+
+# Export Model only if transformers is available
+Model = _Model if TRANSFORMERS_AVAILABLE else None
