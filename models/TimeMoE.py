@@ -14,10 +14,11 @@ class Model(nn.Module):
         """
         super().__init__()
         # Use GPT2 config sized similar to TimeMoE-50M
+        self.d_model = 256
         config = GPT2Config(
             vocab_size=4096,
             n_positions=1024,
-            n_embd=256,
+            n_embd=self.d_model,
             n_layer=6,
             n_head=4,
         )
@@ -25,6 +26,9 @@ class Model(nn.Module):
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
+        # Projection layers for differentiable training path
+        self.input_projection = nn.Linear(1, self.d_model)
+        self.output_projection = nn.Linear(self.d_model, self.pred_len)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         means = x_enc.mean(1, keepdim=True).detach()
@@ -36,21 +40,33 @@ class Model(nn.Module):
         B, L, C = x_enc.shape
         device = x_enc.device
 
-        outputs = []
-        for i in range(C):
-            channel_data = x_enc[:, :, i]
-            input_ids = ((channel_data + 3) * 100).long().clamp(0, 4095)
-            generated = self.model.generate(
-                input_ids=input_ids,
-                max_new_tokens=self.pred_len,
-                do_sample=False,
-                pad_token_id=0,
-            )
-            pred_tokens = generated[:, -self.pred_len:]
-            pred_values = (pred_tokens.float() / 100) - 3
-            outputs.append(pred_values)
+        # Use differentiable path for training (when gradients needed)
+        if self.training:
+            outputs = []
+            for i in range(C):
+                channel_data = x_enc[:, :, i].unsqueeze(-1)  # [B, L, 1]
+                embedded = self.input_projection(channel_data)  # [B, L, d_model]
+                hidden = self.model.transformer(inputs_embeds=embedded).last_hidden_state
+                pred_values = self.output_projection(hidden[:, -1, :])  # [B, pred_len]
+                outputs.append(pred_values)
+            dec_out = torch.stack(outputs, dim=-1)  # [B, pred_len, C]
+        else:
+            # Use generate() for inference (non-differentiable but more accurate)
+            outputs = []
+            for i in range(C):
+                channel_data = x_enc[:, :, i]
+                input_ids = ((channel_data + 3) * 100).long().clamp(0, 4095)
+                generated = self.model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=self.pred_len,
+                    do_sample=False,
+                    pad_token_id=0,
+                )
+                pred_tokens = generated[:, -self.pred_len:]
+                pred_values = (pred_tokens.float() / 100) - 3
+                outputs.append(pred_values)
+            dec_out = torch.stack(outputs, dim=-1)
 
-        dec_out = torch.stack(outputs, dim=-1)
         dec_out = dec_out * stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
         dec_out = dec_out + means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
         return dec_out
