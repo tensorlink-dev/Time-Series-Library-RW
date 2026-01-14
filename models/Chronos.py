@@ -13,8 +13,16 @@ class Model(nn.Module):
         Initialize with random weights using T5Config.
         """
         super().__init__()
-        # Load config from Chronos-Bolt and create T5 model with random weights
-        config = T5Config.from_pretrained("amazon/chronos-bolt-base")
+        # Hardcoded T5 config similar to Chronos-Bolt-Base
+        config = T5Config(
+            vocab_size=4096,
+            d_model=512,
+            d_kv=64,
+            d_ff=2048,
+            num_layers=6,
+            num_heads=8,
+            dropout_rate=0.1,
+        )
         self.model = T5ForConditionalGeneration(config)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len

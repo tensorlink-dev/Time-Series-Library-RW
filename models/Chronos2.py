@@ -3,20 +3,27 @@ from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-from transformers import AutoConfig, AutoModel
+from transformers import BertConfig, BertModel
 
 
 class Model(nn.Module):
     def __init__(self, configs):
         """
         Chronos-2 is an encoder-only transformer model.
-        Initialize with random weights using AutoConfig.
+        Initialize with random weights using BertConfig.
         """
         super().__init__()
-        # Load config and create model with random weights
-        config = AutoConfig.from_pretrained("amazon/chronos-2", trust_remote_code=True)
-        self.model = AutoModel.from_config(config, trust_remote_code=True)
-        self.pred_head = nn.Linear(config.hidden_size if hasattr(config, 'hidden_size') else 768, 1)
+        # Hardcoded BERT config similar to Chronos-2
+        config = BertConfig(
+            vocab_size=4096,
+            hidden_size=768,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            intermediate_size=3072,
+            hidden_dropout_prob=0.1,
+        )
+        self.model = BertModel(config)
+        self.pred_head = nn.Linear(768, 1)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
