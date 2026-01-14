@@ -3,15 +3,10 @@ from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-
-try:
-    from transformers import GPT2Config, GPT2Model
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
+from transformers import GPT2Config, GPT2Model
 
 
-class _Model(nn.Module):
+class Model(nn.Module):
     def __init__(self, configs):
         """
         TiRex is based on xLSTM architecture.
@@ -60,7 +55,3 @@ class _Model(nn.Module):
             dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
             return dec_out
         return None
-
-
-# Export Model only if transformers is available
-Model = _Model if TRANSFORMERS_AVAILABLE else None
