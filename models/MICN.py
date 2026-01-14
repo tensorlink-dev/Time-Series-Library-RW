@@ -164,7 +164,14 @@ class Model(nn.Module):
         # embedding
         zeros = torch.zeros([x_dec.shape[0], self.pred_len, x_dec.shape[2]], device=x_enc.device)
         seasonal_init_dec = torch.cat([seasonal_init_enc[:, -self.seq_len:, :], zeros], dim=1)
-        dec_out = self.dec_embedding(seasonal_init_dec, x_mark_dec)
+        # Construct proper x_mark for dec_embedding (seq_len + pred_len)
+        # Use x_mark_enc padded with zeros for the prediction horizon
+        if x_mark_enc is not None:
+            mark_zeros = torch.zeros([x_mark_enc.shape[0], self.pred_len, x_mark_enc.shape[2]], device=x_enc.device)
+            x_mark_full = torch.cat([x_mark_enc, mark_zeros], dim=1)
+        else:
+            x_mark_full = None
+        dec_out = self.dec_embedding(seasonal_init_dec, x_mark_full)
         dec_out = self.conv_trans(dec_out)
         dec_out = dec_out[:, -self.pred_len:, :] + trend[:, -self.pred_len:, :]
         return dec_out
