@@ -1,7 +1,6 @@
 import math
 import torch
 import torch.nn as nn
-from data_provider.data_factory import data_provider
 
 
 
@@ -299,22 +298,12 @@ class Model(nn.Module):
         """
         get shared frequency spectrums
         """
-        try:
-            # Try to load data and compute spectrum from actual data
-            train_data, train_loader = data_provider(configs, 'train')
-            amps = 0.0
-            for data in train_loader:
-                lookback_window = data[0]
-                amps += abs(torch.fft.rfft(lookback_window, dim=1)).mean(dim=0).mean(dim=1)
-            mask_spectrum = amps.topk(int(amps.shape[0]*self.alpha)).indices
-            return mask_spectrum # as the spectrums of time-invariant component
-        except (AttributeError, FileNotFoundError, KeyError):
-            # Fallback: generate random mask spectrum for standalone/testing use
-            # Spectrum length is (seq_len // 2 + 1) for rfft
-            spectrum_len = self.input_len // 2 + 1
-            num_selected = max(1, int(spectrum_len * self.alpha))
-            mask_spectrum = torch.randperm(spectrum_len)[:num_selected]
-            return mask_spectrum
+        # Generate random mask spectrum for standalone/testing use
+        # Spectrum length is (seq_len // 2 + 1) for rfft
+        spectrum_len = self.input_len // 2 + 1
+        num_selected = max(1, int(spectrum_len * self.alpha))
+        mask_spectrum = torch.randperm(spectrum_len)[:num_selected]
+        return mask_spectrum
     
     def forecast(self, x_enc):
         # Series Stationarization adopted from NSformer
