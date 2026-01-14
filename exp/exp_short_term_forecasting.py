@@ -1,9 +1,6 @@
-from data_provider.data_factory import data_provider
-from data_provider.m4 import M4Meta
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
 from utils.losses import mape_loss, mase_loss, smape_loss
-from utils.m4_summary import M4Summary
 import torch
 import torch.nn as nn
 from torch import optim
@@ -21,20 +18,11 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         super(Exp_Short_Term_Forecast, self).__init__(args)
 
     def _build_model(self):
-        if self.args.data == 'm4':
-            self.args.pred_len = M4Meta.horizons_map[self.args.seasonal_patterns]  # Up to M4 config
-            self.args.seq_len = 2 * self.args.pred_len  # input_len = 2*pred_len
-            self.args.label_len = self.args.pred_len
-            self.args.frequency_map = M4Meta.frequency_map[self.args.seasonal_patterns]
         model = self.model_dict[self.args.model].Model(self.args).float()
 
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
-
-    def _get_data(self, flag):
-        data_set, data_loader = data_provider(self.args, flag)
-        return data_set, data_loader
 
     def _select_optimizer(self):
         model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
@@ -216,20 +204,4 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         forecasts_df.to_csv(folder_path + self.args.seasonal_patterns + '_forecast.csv')
 
         print(self.args.model)
-        file_path = './m4_results/' + self.args.model + '/'
-        if 'Weekly_forecast.csv' in os.listdir(file_path) \
-                and 'Monthly_forecast.csv' in os.listdir(file_path) \
-                and 'Yearly_forecast.csv' in os.listdir(file_path) \
-                and 'Daily_forecast.csv' in os.listdir(file_path) \
-                and 'Hourly_forecast.csv' in os.listdir(file_path) \
-                and 'Quarterly_forecast.csv' in os.listdir(file_path):
-            m4_summary = M4Summary(file_path, self.args.root_path)
-            # m4_forecast.set_index(m4_winner_forecast.columns[0], inplace=True)
-            smape_results, owa_results, mape, mase = m4_summary.evaluate()
-            print('smape:', smape_results)
-            print('mape:', mape)
-            print('mase:', mase)
-            print('owa:', owa_results)
-        else:
-            print('After all 6 tasks are finished, you can calculate the averaged index')
         return
