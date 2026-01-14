@@ -3,20 +3,26 @@ from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-from transformers import AutoConfig, AutoModel
+from transformers import GPT2Config, GPT2Model
 
 
 class Model(nn.Module):
     def __init__(self, configs):
         """
         TiRex is based on xLSTM architecture.
-        Initialize with random weights using a compatible transformer config.
+        Initialize with random weights using GPT2 as a compatible architecture.
         """
         super().__init__()
-        # Use a compatible config for random initialization
-        config = AutoConfig.from_pretrained("NX-AI/TiRex", trust_remote_code=True)
-        self.model = AutoModel.from_config(config, trust_remote_code=True)
-        self.pred_head = nn.Linear(config.hidden_size if hasattr(config, 'hidden_size') else 256, 1)
+        # Use GPT2 config as a compatible transformer architecture
+        config = GPT2Config(
+            vocab_size=4096,
+            n_positions=1024,
+            n_embd=256,
+            n_layer=6,
+            n_head=4,
+        )
+        self.model = GPT2Model(config)
+        self.pred_head = nn.Linear(256, 1)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len

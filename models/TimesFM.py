@@ -3,21 +3,26 @@ from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-from transformers import TimesFmConfig, TimesFmModelForPrediction
+from transformers import GPT2Config, GPT2Model
 
 
 class Model(nn.Module):
     def __init__(self, configs):
         """
-        patch_len: int, patch len for patch_embedding
-        stride: int, stride for patch_embedding
+        TimesFM is a decoder-only foundation model for time series.
+        Initialize with random weights using GPT2Config.
         """
         super().__init__()
-
-        # Load config and create model with random weights
-        config = TimesFmConfig.from_pretrained("google/timesfm-2.0-500m-pytorch")
-        self.model = TimesFmModelForPrediction(config)
-
+        # Hardcoded GPT2 config similar to TimesFM-500M
+        config = GPT2Config(
+            vocab_size=4096,
+            n_positions=2048,
+            n_embd=1024,
+            n_layer=24,
+            n_head=16,
+        )
+        self.model = GPT2Model(config)
+        self.pred_head = nn.Linear(1024, 1)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
@@ -35,14 +40,12 @@ class Model(nn.Module):
         # Process each channel separately
         outputs = []
         for i in range(C):
-            channel_input = x_enc[:, :, i].unsqueeze(-1)  # [B, L, 1]
-            output = self.model(
-                past_values=channel_input,
-                future_values=None,
-                freq=[0] * B,  # frequency indicator
-            )
-            # Get mean prediction
-            pred = output.prediction_outputs[:, :self.pred_len, 0]  # [B, pred_len]
+            channel_data = x_enc[:, :, i]  # [B, L]
+            input_ids = ((channel_data + 3) * 100).long().clamp(0, 4095)
+
+            # Get model output
+            hidden = self.model(input_ids=input_ids).last_hidden_state  # [B, L, hidden]
+            pred = self.pred_head(hidden[:, -self.pred_len:, :]).squeeze(-1)  # [B, pred_len]
             outputs.append(pred)
 
         dec_out = torch.stack(outputs, dim=-1)  # [B, pred_len, C]

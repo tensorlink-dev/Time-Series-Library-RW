@@ -1,23 +1,28 @@
-import numpy as np
 import torch
 from torch import nn
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
-from transformers import AutoConfig, AutoModel
+from transformers import GPT2Config, GPT2Model
 
 
 class Model(nn.Module):
     def __init__(self, configs):
         """
         Moirai-2 is a decoder-only transformer for time series.
-        Initialize with random weights using a compatible config.
+        Initialize with random weights using GPT2Config.
         """
         super().__init__()
-        # Use a standard transformer config for random initialization
-        config = AutoConfig.from_pretrained("Salesforce/moirai-2.0-R-small", trust_remote_code=True)
-        self.model = AutoModel.from_config(config, trust_remote_code=True)
-        self.pred_head = nn.Linear(config.hidden_size if hasattr(config, 'hidden_size') else 512, 1)
+        # Hardcoded GPT2 config similar to Moirai-2.0-R-small
+        config = GPT2Config(
+            vocab_size=4096,
+            n_positions=1024,
+            n_embd=512,
+            n_layer=8,
+            n_head=8,
+        )
+        self.model = GPT2Model(config)
+        self.pred_head = nn.Linear(512, 1)
 
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
