@@ -1,36 +1,6 @@
 import torch
 from torch import nn
-
-# Try to import transformers, fallback to pure PyTorch if unavailable
-try:
-    from transformers import T5Config, T5ForConditionalGeneration
-    HAS_T5 = True
-except ImportError:
-    HAS_T5 = False
-
-
-class FallbackChronosModel(nn.Module):
-    """Fallback model when transformers T5 is not available."""
-    def __init__(self, d_model=512, n_layers=6, n_heads=8):
-        super().__init__()
-        self.embed = nn.Embedding(4096, d_model)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, batch_first=True)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.output_proj = nn.Linear(d_model, 4096)
-
-    def generate(self, input_ids, max_new_tokens, **kwargs):
-        x = self.embed(input_ids)
-        x = self.encoder(x)
-        logits = self.output_proj(x)
-        # Simple greedy generation
-        generated = [input_ids]
-        last_hidden = x[:, -1:, :]
-        for _ in range(max_new_tokens):
-            logits = self.output_proj(last_hidden)
-            next_token = logits.argmax(dim=-1)
-            generated.append(next_token)
-            last_hidden = self.embed(next_token)
-        return torch.cat(generated, dim=1)
+from transformers import T5Config, T5ForConditionalGeneration
 
 
 class Model(nn.Module):
@@ -40,20 +10,17 @@ class Model(nn.Module):
         Initialize with random weights using T5Config.
         """
         super().__init__()
-        if HAS_T5:
-            # Hardcoded T5 config similar to Chronos-Bolt-Base
-            config = T5Config(
-                vocab_size=4096,
-                d_model=512,
-                d_kv=64,
-                d_ff=2048,
-                num_layers=6,
-                num_heads=8,
-                dropout_rate=0.1,
-            )
-            self.model = T5ForConditionalGeneration(config)
-        else:
-            self.model = FallbackChronosModel(d_model=512, n_layers=6, n_heads=8)
+        # Hardcoded T5 config similar to Chronos-Bolt-Base
+        config = T5Config(
+            vocab_size=4096,
+            d_model=512,
+            d_kv=64,
+            d_ff=2048,
+            num_layers=6,
+            num_heads=8,
+            dropout_rate=0.1,
+        )
+        self.model = T5ForConditionalGeneration(config)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len

@@ -1,39 +1,6 @@
 import torch
 from torch import nn
-
-# Try to import transformers, fallback to pure PyTorch if unavailable
-try:
-    from transformers import GPT2Config, GPT2LMHeadModel
-    HAS_GPT2 = True
-except ImportError:
-    HAS_GPT2 = False
-
-
-class FallbackGenerativeModel(nn.Module):
-    """Fallback generative model when transformers GPT2 is not available."""
-    def __init__(self, n_embd=256, n_layers=6, n_heads=4, vocab_size=4096):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.embed = nn.Embedding(vocab_size, n_embd)
-        decoder_layer = nn.TransformerEncoderLayer(d_model=n_embd, nhead=n_heads, batch_first=True)
-        self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=n_layers)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
-
-    def forward(self, input_ids, **kwargs):
-        x = self.embed(input_ids)
-        x = self.decoder(x)
-        logits = self.lm_head(x)
-        return type('Output', (), {'logits': logits})()
-
-    def generate(self, input_ids, max_new_tokens, **kwargs):
-        generated = input_ids
-        for _ in range(max_new_tokens):
-            x = self.embed(generated)
-            x = self.decoder(x)
-            logits = self.lm_head(x[:, -1:, :])
-            next_token = logits.argmax(dim=-1)
-            generated = torch.cat([generated, next_token], dim=1)
-        return generated
+from transformers import GPT2Config, GPT2LMHeadModel
 
 
 class Model(nn.Module):
@@ -43,19 +10,15 @@ class Model(nn.Module):
         Initialize with random weights using GPT2 architecture.
         """
         super().__init__()
-        n_embd = 256
-        if HAS_GPT2:
-            # Use GPT2 config sized similar to TimeMoE-50M
-            config = GPT2Config(
-                vocab_size=4096,
-                n_positions=1024,
-                n_embd=n_embd,
-                n_layer=6,
-                n_head=4,
-            )
-            self.model = GPT2LMHeadModel(config)
-        else:
-            self.model = FallbackGenerativeModel(n_embd=n_embd, n_layers=6, n_heads=4)
+        # Use GPT2 config sized similar to TimeMoE-50M
+        config = GPT2Config(
+            vocab_size=4096,
+            n_positions=1024,
+            n_embd=256,
+            n_layer=6,
+            n_head=4,
+        )
+        self.model = GPT2LMHeadModel(config)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
