@@ -19,7 +19,8 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
 
-        assert configs.e_layers == configs.d_layers, "Encoder and decoder layers must be equal"
+        # Auto-adjust d_layers to match e_layers if they differ
+        d_layers = configs.e_layers  # ETSformer requires encoder and decoder layers to be equal
 
         # Embedding
         self.enc_embedding = DataEmbedding(configs.enc_in, configs.d_model, configs.embed, configs.freq,
@@ -42,7 +43,7 @@ class Model(nn.Module):
                 DecoderLayer(
                     configs.d_model, configs.n_heads, configs.c_out, self.pred_len,
                     dropout=configs.dropout,
-                ) for _ in range(configs.d_layers)
+                ) for _ in range(d_layers)
             ],
         )
         self.transform = Transform(sigma=0.2)
