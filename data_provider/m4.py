@@ -23,8 +23,10 @@ from glob import glob
 
 import numpy as np
 import pandas as pd
-import patoolib
 from tqdm import tqdm
+
+# Lazy import - patoolib only needed for archive extraction
+patoolib = None
 import logging
 import os
 import pathlib
