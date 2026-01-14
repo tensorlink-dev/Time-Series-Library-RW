@@ -39,32 +39,15 @@ class Model(nn.Module):
         stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
         x_enc = (x_enc - means) / stdev
 
-        # Use differentiable path for training (when gradients needed)
-        if self.training:
-            outputs = []
-            for i in range(C):
-                channel_data = x_enc[:, :, i].unsqueeze(-1)  # [B, L, 1]
-                embedded = self.input_projection(channel_data)  # [B, L, d_model]
-                hidden = self.model.transformer(inputs_embeds=embedded).last_hidden_state
-                pred_values = self.output_projection(hidden[:, -1, :])  # [B, pred_len]
-                outputs.append(pred_values)
-            dec_out = torch.stack(outputs, dim=-1)  # [B, pred_len, C]
-        else:
-            # Use generate() for inference (non-differentiable but more accurate)
-            outputs = []
-            for i in range(C):
-                channel_data = x_enc[:, :, i]
-                input_ids = ((channel_data + 3) * 100).long().clamp(0, 4095)
-                generated = self.model.generate(
-                    input_ids=input_ids,
-                    max_new_tokens=self.pred_len,
-                    do_sample=False,
-                    pad_token_id=0,
-                )
-                pred_tokens = generated[:, -self.pred_len:]
-                pred_values = (pred_tokens.float() / 100) - 3
-                outputs.append(pred_values)
-            dec_out = torch.stack(outputs, dim=-1)
+        # Always use differentiable path (transformer forward + projection)
+        outputs = []
+        for i in range(C):
+            channel_data = x_enc[:, :, i].unsqueeze(-1)  # [B, L, 1]
+            embedded = self.input_projection(channel_data)  # [B, L, d_model]
+            hidden = self.model.transformer(inputs_embeds=embedded).last_hidden_state
+            pred_values = self.output_projection(hidden[:, -1, :])  # [B, pred_len]
+            outputs.append(pred_values)
+        dec_out = torch.stack(outputs, dim=-1)  # [B, pred_len, C]
 
         dec_out = dec_out * stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
         dec_out = dec_out + means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
