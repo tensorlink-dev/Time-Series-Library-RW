@@ -71,6 +71,22 @@ class Model(nn.Module):
         # Encoder
         self.enc = KANADModel(window=self.seq_len, order=configs.d_model)
 
+        # Forecasting projection
+        if self.task_name in ['long_term_forecast', 'short_term_forecast']:
+            self.forecast_projection = nn.Linear(self.seq_len, self.pred_len)
+
+    def forecast(self, x_enc):
+        # Reshape the input [B, L, D] to [B * D, L]
+        x_input = rearrange(x_enc, "B L D -> (B D) L")
+        enc_out = self.enc(x_input)
+        # [B * D, L]
+        # Project to prediction length
+        pred_out = self.forecast_projection(enc_out)
+        # [B * D, pred_len]
+        dec_out = rearrange(pred_out, "(B D) L -> B L D", B=x_enc.size(0))
+        # [B, pred_len, D]
+        return dec_out
+
     def anomaly_detection(self, x_enc):
         ## reshape the input [B, L, D] to [B * D, L]
         x_input = rearrange(x_enc, "B L D -> (B D) L")
@@ -85,9 +101,8 @@ class Model(nn.Module):
             self.task_name == "long_term_forecast"
             or self.task_name == "short_term_forecast"
         ):
-            raise NotImplementedError(
-                "Task forecasting for KANAD is temporarily not supported"
-            )
+            dec_out = self.forecast(x_enc)
+            return dec_out  # [B, pred_len, D]
         if self.task_name == "imputation":
             raise NotImplementedError(
                 "Task imputation for KANAD is temporarily not supported"

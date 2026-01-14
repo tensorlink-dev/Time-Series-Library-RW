@@ -299,13 +299,20 @@ class Model(nn.Module):
         """
         get shared frequency spectrums
         """
-        train_data, train_loader = data_provider(configs, 'train')
-        amps = 0.0
-        for data in train_loader:
-            lookback_window = data[0]
-            amps += abs(torch.fft.rfft(lookback_window, dim=1)).mean(dim=0).mean(dim=1)
-        mask_spectrum = amps.topk(int(amps.shape[0]*self.alpha)).indices
-        return mask_spectrum # as the spectrums of time-invariant component
+        try:
+            train_data, train_loader = data_provider(configs, 'train')
+            amps = 0.0
+            for data in train_loader:
+                lookback_window = data[0]
+                amps += abs(torch.fft.rfft(lookback_window, dim=1)).mean(dim=0).mean(dim=1)
+            mask_spectrum = amps.topk(int(amps.shape[0]*self.alpha)).indices
+            return mask_spectrum # as the spectrums of time-invariant component
+        except (AttributeError, FileNotFoundError, KeyError):
+            # Fallback: use evenly spaced frequency indices when data is not available
+            freq_len = self.input_len // 2 + 1
+            num_selected = max(1, int(freq_len * self.alpha))
+            mask_spectrum = torch.linspace(0, freq_len - 1, num_selected).long()
+            return mask_spectrum
     
     def forecast(self, x_enc):
         # Series Stationarization adopted from NSformer

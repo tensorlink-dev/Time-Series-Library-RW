@@ -1,9 +1,26 @@
 import torch
 from torch import nn
-from layers.Transformer_EncDec import Encoder, EncoderLayer
-from layers.SelfAttention_Family import FullAttention, AttentionLayer
-from layers.Embed import PatchEmbedding
-from transformers import GPT2Config, GPT2Model
+
+# Try to import transformers, fallback to pure PyTorch if unavailable
+try:
+    from transformers import GPT2Config, GPT2Model
+    HAS_GPT2 = True
+except ImportError:
+    HAS_GPT2 = False
+
+
+class FallbackDecoderModel(nn.Module):
+    """Fallback decoder model when transformers GPT2 is not available."""
+    def __init__(self, n_embd=256, n_layers=6, n_heads=4):
+        super().__init__()
+        self.embed = nn.Embedding(4096, n_embd)
+        decoder_layer = nn.TransformerEncoderLayer(d_model=n_embd, nhead=n_heads, batch_first=True)
+        self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=n_layers)
+
+    def forward(self, input_ids, **kwargs):
+        x = self.embed(input_ids)
+        x = self.decoder(x)
+        return type('Output', (), {'last_hidden_state': x})()
 
 
 class Model(nn.Module):
@@ -13,16 +30,20 @@ class Model(nn.Module):
         Initialize with random weights using GPT2 as a compatible architecture.
         """
         super().__init__()
-        # Use GPT2 config as a compatible transformer architecture
-        config = GPT2Config(
-            vocab_size=4096,
-            n_positions=1024,
-            n_embd=256,
-            n_layer=6,
-            n_head=4,
-        )
-        self.model = GPT2Model(config)
-        self.pred_head = nn.Linear(256, 1)
+        n_embd = 256
+        if HAS_GPT2:
+            # Use GPT2 config as a compatible transformer architecture
+            config = GPT2Config(
+                vocab_size=4096,
+                n_positions=1024,
+                n_embd=n_embd,
+                n_layer=6,
+                n_head=4,
+            )
+            self.model = GPT2Model(config)
+        else:
+            self.model = FallbackDecoderModel(n_embd=n_embd, n_layers=6, n_heads=4)
+        self.pred_head = nn.Linear(n_embd, 1)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len

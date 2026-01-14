@@ -17,6 +17,14 @@ datatype_dict = {'ETTh1': TypePos([], [x for x in range(7)]),
                  'ETTm1': TypePos([], [x for x in range(7)])}
 
 
+def get_datatype(data_name, enc_in):
+    """Get datatype config, with fallback for unknown datasets."""
+    if data_name in datatype_dict:
+        return datatype_dict[data_name]
+    # Default: use all input channels as observed features, no static features
+    return TypePos([], [x for x in range(enc_in)])
+
+
 def get_known_len(embed_type, freq):
     if embed_type != 'timeF':
         if freq == 't':
@@ -61,8 +69,9 @@ class TFTEmbedding(nn.Module):
     def __init__(self, configs):
         super(TFTEmbedding, self).__init__()
         self.pred_len = configs.pred_len
-        self.static_pos = datatype_dict[configs.data].static
-        self.observed_pos = datatype_dict[configs.data].observed
+        datatype = get_datatype(configs.data, configs.enc_in)
+        self.static_pos = datatype.static
+        self.observed_pos = datatype.observed
         self.static_len = len(self.static_pos)
         self.observed_len = len(self.observed_pos)
 
@@ -261,8 +270,9 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
 
         # Number of variables
-        self.static_len = len(datatype_dict[configs.data].static)
-        self.observed_len = len(datatype_dict[configs.data].observed)
+        datatype = get_datatype(configs.data, configs.enc_in)
+        self.static_len = len(datatype.static)
+        self.observed_len = len(datatype.observed)
         self.known_len = get_known_len(configs.embed, configs.freq)
 
         self.embedding = TFTEmbedding(configs)

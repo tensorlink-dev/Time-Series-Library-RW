@@ -1,9 +1,26 @@
 import torch
 from torch import nn
-from layers.Transformer_EncDec import Encoder, EncoderLayer
-from layers.SelfAttention_Family import FullAttention, AttentionLayer
-from layers.Embed import PatchEmbedding
-from transformers import BertConfig, BertModel
+
+# Try to import transformers, fallback to pure PyTorch if unavailable
+try:
+    from transformers import BertConfig, BertModel
+    HAS_BERT = True
+except ImportError:
+    HAS_BERT = False
+
+
+class FallbackEncoderModel(nn.Module):
+    """Fallback encoder model when transformers is not available."""
+    def __init__(self, hidden_size=768, n_layers=12, n_heads=12):
+        super().__init__()
+        self.embed = nn.Embedding(4096, hidden_size)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=n_heads, batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+    def forward(self, input_ids, **kwargs):
+        x = self.embed(input_ids)
+        x = self.encoder(x)
+        return type('Output', (), {'last_hidden_state': x})()
 
 
 class Model(nn.Module):
@@ -13,17 +30,21 @@ class Model(nn.Module):
         Initialize with random weights using BertConfig.
         """
         super().__init__()
-        # Hardcoded BERT config similar to Chronos-2
-        config = BertConfig(
-            vocab_size=4096,
-            hidden_size=768,
-            num_hidden_layers=12,
-            num_attention_heads=12,
-            intermediate_size=3072,
-            hidden_dropout_prob=0.1,
-        )
-        self.model = BertModel(config)
-        self.pred_head = nn.Linear(768, 1)
+        hidden_size = 768
+        if HAS_BERT:
+            # Hardcoded BERT config similar to Chronos-2
+            config = BertConfig(
+                vocab_size=4096,
+                hidden_size=hidden_size,
+                num_hidden_layers=12,
+                num_attention_heads=12,
+                intermediate_size=3072,
+                hidden_dropout_prob=0.1,
+            )
+            self.model = BertModel(config)
+        else:
+            self.model = FallbackEncoderModel(hidden_size=hidden_size, n_layers=12, n_heads=12)
+        self.pred_head = nn.Linear(hidden_size, 1)
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len

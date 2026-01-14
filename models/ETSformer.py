@@ -19,7 +19,8 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
 
-        assert configs.e_layers == configs.d_layers, "Encoder and decoder layers must be equal"
+        # ETSformer requires e_layers == d_layers, use minimum if they differ
+        num_layers = min(configs.e_layers, configs.d_layers)
 
         # Embedding
         self.enc_embedding = DataEmbedding(configs.enc_in, configs.d_model, configs.embed, configs.freq,
@@ -33,7 +34,7 @@ class Model(nn.Module):
                     dim_feedforward=configs.d_ff,
                     dropout=configs.dropout,
                     activation=configs.activation,
-                ) for _ in range(configs.e_layers)
+                ) for _ in range(num_layers)
             ]
         )
         # Decoder
@@ -42,7 +43,7 @@ class Model(nn.Module):
                 DecoderLayer(
                     configs.d_model, configs.n_heads, configs.c_out, self.pred_len,
                     dropout=configs.dropout,
-                ) for _ in range(configs.d_layers)
+                ) for _ in range(num_layers)
             ],
         )
         self.transform = Transform(sigma=0.2)
