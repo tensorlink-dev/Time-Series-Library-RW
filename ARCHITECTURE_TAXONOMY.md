@@ -259,25 +259,29 @@ up to ~1B total params with ~300M active).
 **Paper**: "TimeMoE: Billion-Scale Time Series Foundation Models with Mixture of Experts"
 
 - **Backbone**: Decoder-only Transformer with **Sparse MoE FFN layers**. LLaMA-style
-  (RMSNorm, SwiGLU, RoPE, Grouped Query Attention)
+  (RMSNorm, SwiGLU, RoPE). Causal multi-head self-attention with QKV bias for extrapolation
 - **Model sizes**:
 
-  | Variant | Total Params | Active Params | Experts | Top-k |
-  |---------|-------------|---------------|---------|-------|
-  | 50M (dense) | 50M | 50M | None (baseline) | - |
-  | 200M | 200M | 110M | 8 | 2 |
-  | 1.1B | 1.1B | 310M | 16 | 2 |
-  | 2.4B | 2.4B | 600M | 16 | 2 |
+  | Variant | Total Params | Active Params | Routed Experts | Shared Expert | Top-k |
+  |---------|-------------|---------------|----------------|---------------|-------|
+  | Base | ~113M | ~50M | 8 | 1 | 2 |
+  | Large | ~453M | ~200M | 8 | 1 | 2 |
+  | Ultra | 2.4B | ~1.1B | 8 | 1 | 2 |
 
-- **MoE mechanism**: Each FFN layer replaced by N expert SwiGLU FFNs. Router (learned linear)
-  selects top-k experts per token. Weighted sum of selected expert outputs. Load-balancing
-  auxiliary loss
-- **Attention**: Grouped Query Attention (GQA) -- fewer KV heads than query heads (e.g., 4:1)
-- **Input**: Non-overlapping patches -> Linear -> RoPE positional encoding
-- **Output**: Next-patch prediction via `Linear(d_model, patch_len)`. Autoregressive at patch level
-- **Training**: MSE loss + MoE load balancing; trained on Time-300B (~300B time points)
+- **MoE mechanism**: Each FFN layer replaced by 8 routed SwiGLU expert FFNs + **1 shared
+  expert** (always active, sigmoid-gated: `g * shared_FFN(h) + sum(s_i * expert_i(h))`).
+  Router uses softmax top-k=2 selection. Load-balancing auxiliary loss (alpha=0.02).
+  DeepSeekMoE-style shared expert isolation
+- **Input**: **Point-wise tokenization** (each individual timestep is one token, NOT patches).
+  SwiGLU embedding maps each scalar to d_model. RoPE positional encoding. Max context: 4096
+- **Output**: **Multi-resolution forecasting heads** -- 4 parallel linear heads predicting
+  [1, 8, 32, 64] future steps simultaneously during training. At inference, **dynamic head
+  scheduling** selects the largest head ≤ remaining horizon and autoregressively chains
+  predictions for arbitrary-length forecasting
+- **Training**: Huber loss (not MSE, for outlier robustness) + MoE load balancing; trained on
+  Time-300B (~300B time points); 128x A100 GPUs
 - **Univariate**: Single-variate processing
-- **Structural class**: Decoder-only Transformer + Sparse MoE | GQA | Patch-autoregressive | Conditional computation
+- **Structural class**: Decoder-only Transformer + Sparse MoE + Shared Expert | Point-wise tokens | Multi-resolution heads | Conditional computation
 
 ---
 
@@ -305,7 +309,7 @@ Input -> [Block]^N -> Output
 | **Chronos-Bolt** | Patch -> T5 Enc-Dec (single-token decoder) -> Quantile projection |
 | **Chronos-2** | Patch -> T5 Encoder (Time Attn + Group Attn) -> Quantile projection |
 | **TimesFM** | Patch -> Causal Transformer -> Multi-size output patch heads |
-| **TimeMoE** | Patch -> Causal Transformer+MoE -> Next-patch prediction |
+| **TimeMoE** | Point-wise SwiGLU embed -> Causal Transformer+MoE -> Multi-resolution heads |
 | **TiRex** | Patch -> xLSTM (sLSTM+mLSTM blocks) -> Next-patch prediction |
 
 ### 3.2 Parallel Branches Merging (Fan-out / Fan-in)
@@ -497,7 +501,7 @@ Models that process the entire time series at one resolution:
 | **Chronos / Chronos-Bolt / Chronos-2** | Single resolution (per-token / per-patch) |
 | **Sundial** | Single resolution (patch-based) |
 | **TiRex** | Single resolution (patch-based) |
-| **TimeMoE** | Single resolution (patch-based) |
+| **TimeMoE** | Single resolution (point-wise tokens, multi-resolution output heads) |
 
 ### 5.2 Downsampling Pyramid (Encoder Side)
 
@@ -664,13 +668,13 @@ Using only the final timestep's hidden state to generate the full horizon:
 |-------|-----------|
 | **Chronos** | T5 decoder generates discrete bin tokens one-by-one via cross-entropy; categorical distribution over 4096 bins per step |
 | **TiRex** | xLSTM produces next-patch predictions; autoregressive at patch level |
-| **TimeMoE** | Causal Transformer+MoE produces next-patch prediction; autoregressive at patch level |
 
-### 7.6 Semi-Autoregressive Patched Decoding
+### 7.6 Semi-Autoregressive Multi-Resolution Decoding
 
 | Model | Mechanism |
 |-------|-----------|
 | **TimesFM** | Asymmetric patching: input patches of 32, output patches of {1,8,16,32,64,128}. Autoregressive across patches but parallel within each output patch. Selects largest output patch ≤ remaining horizon |
+| **TimeMoE** | Point-wise tokenization with 4 multi-resolution output heads [1,8,32,64 steps]. Dynamic head scheduling at inference: select largest head ≤ remaining horizon, chain autoregressively. Huber loss, not MSE |
 
 ### 7.7 Single-Pass Distributional Output
 
@@ -752,9 +756,7 @@ Grouping consecutive timesteps into tokens:
 | **Sundial** | ~64 (configurable) | No | Non-overlapping |
 | **TiRex** | Configurable | No | Non-overlapping |
 | **TimesFM** | 32 (input), {1-128} (output) | No | Asymmetric I/O patch sizes |
-| **TimeMoE** | Configurable | No | Non-overlapping |
-
-Note: Original Chronos uses per-timestep discrete tokenization; Chronos-Bolt and Chronos-2 use patching.
+Note: Original Chronos and TimeMoE use per-timestep tokenization (not patching). Chronos-Bolt and Chronos-2 use patching.
 
 ### 8.4 Residual Connection Patterns
 
@@ -809,7 +811,7 @@ Moirai:             MaskedEnc+AVA | EncOnly | CrossVar-AVA | MultiPatch-MPSP | T
 Sundial:            CausalTransformer+FlowMatch | TwoComponent | Univariate | SingleScale-Patch | TimeDomain+Latent | FlowODE-Generative
 TiRex:              xLSTM(sLSTM+mLSTM) | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
 TimesFM:            DecOnly-Transformer | SeqChain | Univariate | MultiOutputPatch | TimeDomain | SemiAR-AsymPatch
-TimeMoE:            DecOnly-Transformer+SparseMoE | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
+TimeMoE:            DecOnly-Transformer+SparseMoE+SharedExpert | SeqChain | Univariate | PointWise+MultiResHead | TimeDomain | MultiResHead-DynSchedule
 
 DLinear:            Linear | ParallelMerge | ChanIndep | SingleScale | TimeDomain | DecompAdditive
 LightTS:            Linear+LeakyReLU | ParallelMerge+Highway | WeakChanMix | DualSampling | TimeDomain | DirectProj+Skip
@@ -852,15 +854,15 @@ decomposition in encoder and decoder, accumulated trend). They differ only in th
 replacement mechanism (AutoCorrelation vs. Fourier/Wavelet blocks).
 
 ### Class D: Causal Decoder-Only Patch Transformer (Foundation)
-**TimesFM** and **TimeMoE** share the same high-level topology: patch input -> causal
-decoder-only transformer -> next-patch prediction. They differ primarily in that TimeMoE
-uses Sparse MoE FFN layers and GQA, while TimesFM uses dense FFN with asymmetric output
-patch sizes. Both use RoPE and are univariate.
+**TimesFM** and **TiRex** share the same high-level topology: patch input -> causal backbone
+-> next-patch prediction. TimesFM uses a standard Transformer with asymmetric output patch
+sizes; TiRex uses xLSTM blocks (mLSTM matrix memory is functionally similar to linear
+attention with decaying state). Both use RoPE and are univariate.
 
-### Class E: Patch-Autoregressive Recurrent (Foundation)
-**TiRex** (xLSTM) shares the same patch-in, next-patch-out autoregressive topology as
-TimesFM/TimeMoE but replaces the Transformer backbone with xLSTM blocks. The matrix
-memory in mLSTM is functionally similar to linear attention with decaying state.
+### Class E: Causal Decoder-Only Point-wise Transformer (Foundation)
+**TimeMoE** is unique among foundation models in using **point-wise tokenization** (each
+timestep = one token, no patching). It combines Sparse MoE with a shared expert and
+multi-resolution output heads [1, 8, 32, 64] with dynamic scheduling.
 
 ### Class F: FFT-Period + 2D Processing
 **TimesNet** and **MSGNet** share the FFT period detection and 1D-to-2D temporal reshape.
@@ -919,7 +921,7 @@ graph convolution + attention.
 | Sundial | CausalTrans+Flow | TwoComponent | Univariate | Patch | Time+Latent | FlowODE-Generative |
 | TiRex | xLSTM(s+mLSTM) | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
 | TimesFM | DecOnly-Trans | SeqChain | Univariate | MultiOutputPatch | Time | SemiAR-AsymPatch |
-| TimeMoE | DecOnly+SparseMoE | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
+| TimeMoE | DecOnly+SparseMoE+Shared | SeqChain | Univariate | PointWise+MultiResHead | Time | MultiResHead-DynSchedule |
 
 ---
 
@@ -959,10 +961,11 @@ models, Chronos (T5 enc-dec) and Sundial (transformer + flow matching) are the e
 the rest are decoder-only or encoder-only.
 
 ### 6. Foundation Models Converge on Patch-Autoregressive Design
-Despite diverse naming and marketing, 5 of 7 foundation models share the same high-level
-pattern: **patch input -> causal backbone -> next-patch prediction**. They diverge primarily in:
-- Backbone choice: Transformer (TimesFM, TimeMoE), xLSTM (TiRex)
-- Scaling strategy: Dense (TimesFM, TiRex) vs. Sparse MoE (TimeMoE)
+Despite diverse naming, most foundation models share a causal backbone with autoregressive
+multi-step prediction. They diverge primarily in:
+- Tokenization: Patch-based (TimesFM, TiRex, Sundial) vs. Point-wise (TimeMoE) vs. Discrete bins (Chronos)
+- Backbone choice: Transformer (TimesFM, TimeMoE, Sundial), xLSTM (TiRex), T5 (Chronos family)
+- Scaling strategy: Dense (TimesFM, TiRex) vs. Sparse MoE + shared expert (TimeMoE)
 - Output distribution: Point prediction (TimesFM v1), Quantile (Chronos-Bolt, Chronos-2),
   Mixture (Moirai), Flow-based (Sundial), Categorical over bins (Chronos)
 
