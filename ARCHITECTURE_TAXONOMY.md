@@ -223,19 +223,21 @@ up to ~1B total params with ~300M active).
 #### TiRex (2024-2025)
 **Paper**: "TiRex: Time-series Representation eXtraction"
 
-- **Backbone**: **xLSTM (Extended LSTM)**, NOT a Transformer. Sizes: Small (~40M),
-  Base (~170M), Large (~630M)
-- **xLSTM architecture**: Alternating blocks of two modernized LSTM variants:
-  - **sLSTM** (scalar): Enhanced LSTM with exponential gating and memory mixing
-  - **mLSTM** (matrix): Replaces scalar cell state with a **matrix memory**:
-    `C_t = f_t * C_{t-1} + i_t * (v_t @ k_t^T)` and `h_t = o_t * (C_t @ q_t)`.
-    Equivalent to linear attention with decaying memory. Fully parallelizable via
-    chunkwise scan
-- **Input**: Patch-based tokenization -> Linear projection -> xLSTM blocks
+- **Backbone**: **sLSTM only** (scalar LSTM variant from the xLSTM family). Single variant,
+  **35M parameters**. The paper's ablation study showed that mLSTM *degrades* performance;
+  TiRex deliberately excludes mLSTM
+- **sLSTM architecture**: Enhanced LSTM with exponential gating and memory mixing.
+  Uses **block-diagonal recurrence** (4 heads x 128 dimensions) for efficient
+  parallelization. Each block has a SiLU-gated FFN (feed-forward network)
+- **Input**: Patch-based tokenization -> Linear projection -> sLSTM blocks
+- **Training**: **Contiguous Patch Masking (CPM)** — masks contiguous spans of patches
+  during pre-training, more effective than random masking for time-series
 - **Complexity**: O(L) in sequence length (like Mamba/SSMs, unlike O(L^2) attention)
-- **Output**: Patch-level next-patch prediction; autoregressive at patch level
+- **Output**: **9 quantile outputs** (0.1, 0.2, ..., 0.9) via quantile regression heads.
+  Uses **missing-value rollout** for forecasting: pads future horizon with NaN patches
+  and processes in a single forward pass (NOT autoregressive patch decoding)
 - **Use cases**: Zero-shot forecasting, classification, anomaly detection
-- **Structural class**: xLSTM (Recurrent/SSM-like) | Patch-based | Matrix memory | Linear complexity
+- **Structural class**: sLSTM (Recurrent) | Patch-based | Block-diagonal | Quantile output | Linear complexity
 
 #### TimesFM (Google, 2024)
 **Paper**: "A Decoder-Only Foundation Model for Time-Series Forecasting"
@@ -310,7 +312,7 @@ Input -> [Block]^N -> Output
 | **Chronos-2** | Patch -> T5 Encoder (Time Attn + Group Attn) -> Quantile projection |
 | **TimesFM** | Patch -> Causal Transformer -> Multi-size output patch heads |
 | **TimeMoE** | Point-wise SwiGLU embed -> Causal Transformer+MoE -> Multi-resolution heads |
-| **TiRex** | Patch -> xLSTM (sLSTM+mLSTM blocks) -> Next-patch prediction |
+| **TiRex** | Patch -> sLSTM blocks (block-diagonal) -> Quantile output via NaN-rollout |
 
 ### 3.2 Parallel Branches Merging (Fan-out / Fan-in)
 
@@ -564,7 +566,7 @@ TemporalFusionTransformer, Mamba, MambaSimple, SegRNN, SCINet, KANAD, TimeFilter
 Chronos, Chronos-Bolt, Chronos-2, Moirai, TimesFM, TimeMoE**
 
 Note: Sundial's flow matching decoder operates in a continuous latent space (noise -> forecast
-via ODE integration) but the context encoder is time-domain. TiRex uses xLSTM which is
+via ODE integration) but the context encoder is time-domain. TiRex uses sLSTM which is
 time-domain recurrent.
 
 ### 6.2 Frequency Domain (FFT/DFT)
@@ -667,7 +669,7 @@ Using only the final timestep's hidden state to generate the full horizon:
 | Model | Mechanism |
 |-------|-----------|
 | **Chronos** | T5 decoder generates discrete bin tokens one-by-one via cross-entropy; categorical distribution over 4096 bins per step |
-| **TiRex** | xLSTM produces next-patch predictions; autoregressive at patch level |
+| ~~TiRex~~ | *(moved to 7.7 — uses single-pass NaN-rollout, not autoregressive)* |
 
 ### 7.6 Semi-Autoregressive Multi-Resolution Decoding
 
@@ -683,6 +685,7 @@ Using only the final timestep's hidden state to generate the full horizon:
 | **Chronos-Bolt** | T5 enc-dec (single-token decoder cross-attends to encoder) -> ResidualBlock projects to full quantile forecast in one shot |
 | **Chronos-2** | T5 encoder-only (Time+Group Attn) -> ResidualBlock projects masked future patches to 21 quantiles |
 | **Moirai** | Masked encoder (single pass) -> mixture distribution heads: Student's t / Normal / NegBin / LogNormal with 10-20 components per timestep |
+| **TiRex** | sLSTM blocks process context + NaN-padded future patches in a single forward pass (**missing-value rollout**). Output heads produce **9 quantiles** (0.1-0.9) per patch position. No autoregressive decoding |
 
 ### 7.8 Flow-Based Generative Output
 
@@ -776,7 +779,7 @@ Note: Original Chronos and TimeMoE use per-timestep tokenization (not patching).
 | Causal (masked) | Bidirectional (unmasked) |
 |-----------------|------------------------|
 | Transformer (decoder), Informer (decoder), Autoformer (decoder), FEDformer (decoder), Nonstationary_Transformer (decoder), MultiPatchFormer (temporal encoder), TemporalFusionTransformer, Pyraformer (pyramid mask) | Transformer (encoder), PatchTST, PAttn, iTransformer, Crossformer, TimeXer (self-attention on patches) |
-| Chronos (T5 decoder, causal), Sundial (context encoder, causal), TiRex (xLSTM, causal), TimesFM (decoder-only, causal), TimeMoE (decoder-only+MoE, causal) | Chronos (T5 encoder, bidirectional), Chronos-Bolt (T5 encoder, bidirectional), Chronos-2 (T5 encoder + Group Attn, bidirectional), Moirai (masked encoder, structured AVA mask) |
+| Chronos (T5 decoder, causal), Sundial (context encoder, causal), TiRex (sLSTM, causal), TimesFM (decoder-only, causal), TimeMoE (decoder-only+MoE, causal) | Chronos (T5 encoder, bidirectional), Chronos-Bolt (T5 encoder, bidirectional), Chronos-2 (T5 encoder + Group Attn, bidirectional), Moirai (masked encoder, structured AVA mask) |
 
 ---
 
@@ -809,7 +812,7 @@ Chronos-Bolt:       T5-EncDec(1tok) | EncDec(single-pass) | Univariate | SingleS
 Chronos-2:          T5-EncOnly+GroupAttn | EncOnly | CrossVar-GroupAttn | SingleScale-Patch | TimeDomain | SinglePass-Quantile
 Moirai:             MaskedEnc+AVA | EncOnly | CrossVar-AVA | MultiPatch-MPSP | TimeDomain | SinglePass-MixtureDistrib
 Sundial:            CausalTransformer+FlowMatch | TwoComponent | Univariate | SingleScale-Patch | TimeDomain+Latent | FlowODE-Generative
-TiRex:              xLSTM(sLSTM+mLSTM) | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
+TiRex:              sLSTM-only(block-diag) | SeqChain | Univariate | SingleScale-Patch | TimeDomain | SinglePass-Quantile(NaNRollout)
 TimesFM:            DecOnly-Transformer | SeqChain | Univariate | MultiOutputPatch | TimeDomain | SemiAR-AsymPatch
 TimeMoE:            DecOnly-Transformer+SparseMoE+SharedExpert | SeqChain | Univariate | PointWise+MultiResHead | TimeDomain | MultiResHead-DynSchedule
 
@@ -854,10 +857,14 @@ decomposition in encoder and decoder, accumulated trend). They differ only in th
 replacement mechanism (AutoCorrelation vs. Fourier/Wavelet blocks).
 
 ### Class D: Causal Decoder-Only Patch Transformer (Foundation)
-**TimesFM** and **TiRex** share the same high-level topology: patch input -> causal backbone
--> next-patch prediction. TimesFM uses a standard Transformer with asymmetric output patch
-sizes; TiRex uses xLSTM blocks (mLSTM matrix memory is functionally similar to linear
-attention with decaying state). Both use RoPE and are univariate.
+**TimesFM** stands alone in this class: patch input -> causal Transformer -> asymmetric
+multi-size output patches. Semi-autoregressive (autoregressive across patches, parallel
+within). 200M dense parameters.
+
+**TiRex** was previously grouped here but is structurally distinct: it uses **sLSTM-only**
+(not a Transformer or mLSTM), outputs **9 quantiles** (not point predictions), and uses
+**missing-value NaN-rollout** (single forward pass, not autoregressive). TiRex is better
+classified as its own structural class — a recurrent single-pass quantile model.
 
 ### Class E: Causal Decoder-Only Point-wise Transformer (Foundation)
 **TimeMoE** is unique among foundation models in using **point-wise tokenization** (each
@@ -919,7 +926,7 @@ graph convolution + attention.
 | Chronos-2 | T5-Enc+GroupAttn | Enc-Only | GroupAttn-CrossVar | Patch | Time | SinglePass-Quantile |
 | Moirai | MaskedEnc+AVA | Enc-Only | AVA-CrossVar | MultiPatch(MPSP) | Time | MixtureDistrib |
 | Sundial | CausalTrans+Flow | TwoComponent | Univariate | Patch | Time+Latent | FlowODE-Generative |
-| TiRex | xLSTM(s+mLSTM) | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
+| TiRex | sLSTM-only(block-diag) | SeqChain | Univariate | Patch | Time | SinglePass-Quantile(NaNRollout) |
 | TimesFM | DecOnly-Trans | SeqChain | Univariate | MultiOutputPatch | Time | SemiAR-AsymPatch |
 | TimeMoE | DecOnly+SparseMoE+Shared | SeqChain | Univariate | PointWise+MultiResHead | Time | MultiResHead-DynSchedule |
 
@@ -934,7 +941,7 @@ maps (DLinear) to sophisticated multi-scale wavelet-domain mixers (WPMixer).
 
 ### 2. Channel Handling Is the Primary Structural Divide
 The most impactful architectural decision is how inter-variate relationships are modeled:
-- **5 foundation models** are strictly univariate by design (Chronos, Chronos-Bolt, Sundial, TiRex, TimesFM, TimeMoE)
+- **6 foundation models** are strictly univariate by design (Chronos, Chronos-Bolt, Sundial, TiRex, TimesFM, TimeMoE)
 - **13 non-foundation models** are strictly channel-independent
 - **13 models** mix channels only through the input embedding (Conv1d)
 - **10 models** have explicit cross-variable mechanisms (including Moirai's AVA and Chronos-2's Group Attention)
@@ -964,8 +971,10 @@ the rest are decoder-only or encoder-only.
 Despite diverse naming, most foundation models share a causal backbone with autoregressive
 multi-step prediction. They diverge primarily in:
 - Tokenization: Patch-based (TimesFM, TiRex, Sundial) vs. Point-wise (TimeMoE) vs. Discrete bins (Chronos)
-- Backbone choice: Transformer (TimesFM, TimeMoE, Sundial), xLSTM (TiRex), T5 (Chronos family)
+- Backbone choice: Transformer (TimesFM, TimeMoE, Sundial), sLSTM (TiRex), T5 (Chronos family)
 - Scaling strategy: Dense (TimesFM, TiRex) vs. Sparse MoE + shared expert (TimeMoE)
+- Decoding: Autoregressive (Chronos, TimesFM), single-pass with NaN-rollout (TiRex),
+  flow-based generative (Sundial), single-pass quantile (Chronos-Bolt, Chronos-2)
 - Output distribution: Point prediction (TimesFM v1), Quantile (Chronos-Bolt, Chronos-2),
   Mixture (Moirai), Flow-based (Sundial), Categorical over bins (Chronos)
 
