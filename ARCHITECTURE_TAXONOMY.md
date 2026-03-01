@@ -126,23 +126,139 @@ Models that replace dot-product attention with frequency-domain operations:
 |-------|-----------|-------|
 | **Koopa** | Koopman operators (learned linear + DMD least-squares) | Dual-stream: time-invariant (learned K) + time-variant (data-driven DMD) |
 
-### 2.10 Pretrained Backbone Wrappers
+### 2.10 Foundation Models (Published Architectures)
 
-These models wrap HuggingFace transformer backbones with randomly initialized weights:
+> **Note on this repository's implementations**: The code in `models/` for these 7 models
+> uses simplified HuggingFace proxy wrappers (T5/BERT/GPT-2 with random weights), not the
+> actual published architectures. The descriptions below document the **real** architectures
+> as published in their respective papers.
 
-| Model | Backbone | Input Method | Output Method |
-|-------|----------|-------------|---------------|
-| **Chronos** | T5 Encoder (6L, 512d, 8H) | Continuous nn.Linear(1, 512) | Last-position -> Linear(512, pred_len) |
-| **Chronos2** | BERT (12L, 768d, 12H) | Quantized int tokens `((x+3)*100).long()` | Last-pred_len positions -> Linear(768, 1) |
-| **Moirai** | GPT-2 (8L, 512d, 8H) | Quantized int tokens | Last-pred_len positions -> Linear(512, 1) |
-| **Sundial** | GPT-2 LMHead (12L, 512d, 8H) | Continuous nn.Linear(1, 512) | Last-position -> Linear(512, pred_len) |
-| **TiRex** | GPT-2 (6L, 256d, 4H) | Quantized int tokens | Last-pred_len positions -> Linear(256, 1) |
-| **TimesFM** | GPT-2 (24L, 1024d, 16H) | Quantized int tokens | Last-pred_len positions -> Linear(1024, 1) |
-| **TimeMoE** | GPT-2 LMHead (6L, 256d, 4H) | Continuous nn.Linear(1, 256) | Last-position -> Linear(256, pred_len) |
+#### Chronos (Amazon, 2024)
+**Paper**: "Chronos: Learning the Language of Time Series"
 
-**Important**: None load pretrained weights. All are randomly initialized. The actual published
-architectures differ significantly from these proxy implementations (e.g., real TiRex uses
-xLSTM, real Sundial uses flow matching, real Chronos uses discrete binning with cross-entropy).
+- **Backbone**: T5 encoder-decoder transformer (20M to 710M params across Mini/Small/Base/Large)
+- **Tokenization**: Continuous values mapped to a **fixed vocabulary of discrete bins** (4096 tokens)
+  via quantile or uniform binning with mean-scaling normalization
+- **Core mechanism**: Treats time series as a **language modeling problem** -- cross-entropy
+  loss on discrete token predictions
+- **Decoding**: **Autoregressive** token-by-token generation via the T5 decoder
+- **Output**: Categorical distribution over bins at each step; samples converted back to
+  continuous values via bin centroids. Inherently **probabilistic**
+- **Augmentation**: TSMixup (convex combination of series pairs) + KernelSynth (Gaussian
+  process kernel-generated synthetic data)
+- **Structural class**: Enc-Dec Transformer | Discrete tokenization | Autoregressive | Probabilistic
+
+#### Chronos-Bolt / Chronos2 (Amazon, 2024-2025)
+
+- **Backbone**: T5 **encoder only** (drops the decoder). Sizes: Tiny (9M), Mini (21M),
+  Small (48M), Base (205M)
+- **Tokenization**: Same discrete bin tokenization as Chronos
+- **Core change**: **Non-autoregressive** -- generates all predictions in a single forward pass
+- **Output**: Prediction head outputs parameters of a **Student's t-distribution** per timestep
+  (location, scale, degrees of freedom) instead of categorical over bins
+- **Loss**: Negative log-likelihood of Student's t (not cross-entropy)
+- **Speed**: ~250x faster inference than original Chronos
+- **Structural class**: Enc-Only Transformer | Discrete input / Continuous output | Single-pass | Probabilistic
+
+#### Moirai (Salesforce, 2024)
+**Paper**: "Unified Training of Universal Time Series Forecasting Transformers"
+
+- **Backbone**: Transformer **masked encoder** (NOT decoder-only). Sizes: Small (14M, 6L/384d),
+  Base (91M, 12L/768d), Large (311M, 24L/1024d)
+- **Any-Variate Attention (AVA)**: The key innovation. Each variate-timestep pair gets its own
+  token. A structured attention mask controls:
+  - Temporal attention (same variate across time)
+  - Cross-variate attention (different variates at same timestep)
+  - Causal masking in forecast direction
+  - Handles **arbitrary numbers of variates** at test time without architectural changes
+- **Multiple Patch Size Projection (MPSP)**: Multiple patch sizes simultaneously, with
+  frequency-aware selection. Each patch size has its own linear projection layer
+- **Positional encoding**: RoPE (Rotary Position Embeddings), not sinusoidal
+- **Output**: **Mixture distribution heads** -- outputs parameters of Student's t mixture,
+  Normal mixture, Negative binomial, or Log-normal (10-20 components). Distribution family
+  selected per dataset
+- **Loss**: Negative log-likelihood on the mixture distribution
+- **Normalization**: RevIN (instance normalization)
+- **Structural class**: Masked Encoder | Any-Variate Attention | Multi-patch | Mixture-distribution output
+
+**Moirai-MoE** extends the base with Sparse MoE FFN layers (top-2 of 8-16 experts per token,
+up to ~1B total params with ~300M active).
+
+#### Sundial (2025)
+**Paper**: "Sundial: A Family of Highly Capable Time Series Foundation Models"
+
+- **Two-component architecture**:
+  1. **Context Encoder**: Decoder-only (causal) Transformer. Sizes: Small (37M), Base (198M),
+     Large (756M). LLaMA-style: RMSNorm, SwiGLU FFN, RoPE
+  2. **Flow Matching Decoder**: Conditional flow matching module for probabilistic generation
+- **Input**: Non-overlapping patches -> Linear projection -> RoPE -> Causal Transformer
+- **Flow matching mechanism** (the key innovation):
+  - Learns a **velocity field** that transforms Gaussian noise into forecast distributions
+  - Training: Interpolate between noise and target at random time t; predict velocity
+  - Inference: Start from Gaussian noise, integrate learned ODE from t=0 to t=1
+  - Each different noise sample produces a different forecast (inherently probabilistic)
+- **Output**: Can model **arbitrary distribution shapes** (not limited to parametric families)
+- **Univariate focus**: Designed primarily for single-variate time series
+- **Structural class**: Causal Transformer + Flow Matching | ODE-based sampling | Non-parametric probabilistic
+
+#### TiRex (2024-2025)
+**Paper**: "TiRex: Time-series Representation eXtraction"
+
+- **Backbone**: **xLSTM (Extended LSTM)**, NOT a Transformer. Sizes: Small (~40M),
+  Base (~170M), Large (~630M)
+- **xLSTM architecture**: Alternating blocks of two modernized LSTM variants:
+  - **sLSTM** (scalar): Enhanced LSTM with exponential gating and memory mixing
+  - **mLSTM** (matrix): Replaces scalar cell state with a **matrix memory**:
+    `C_t = f_t * C_{t-1} + i_t * (v_t @ k_t^T)` and `h_t = o_t * (C_t @ q_t)`.
+    Equivalent to linear attention with decaying memory. Fully parallelizable via
+    chunkwise scan
+- **Input**: Patch-based tokenization -> Linear projection -> xLSTM blocks
+- **Complexity**: O(L) in sequence length (like Mamba/SSMs, unlike O(L^2) attention)
+- **Output**: Patch-level next-patch prediction; autoregressive at patch level
+- **Use cases**: Zero-shot forecasting, classification, anomaly detection
+- **Structural class**: xLSTM (Recurrent/SSM-like) | Patch-based | Matrix memory | Linear complexity
+
+#### TimesFM (Google, 2024)
+**Paper**: "A Decoder-Only Foundation Model for Time-Series Forecasting"
+
+- **Backbone**: Custom decoder-only Transformer. 200M params (20L, 1280d, 16H)
+- **Patched decoding** (the key innovation):
+  - **Input**: Fixed patch size of 32 timesteps -> Linear residual block -> d_model
+  - **Output**: Multiple output heads for different patch sizes {1, 8, 16, 32, 64, 128}
+  - At inference, selects the largest output patch size ≤ remaining horizon
+  - **Semi-autoregressive**: Autoregressive across patches, parallel within each patch
+- **Frequency token**: Learnable embedding prepended to input indicating temporal granularity
+  (hourly, daily, weekly, etc.)
+- **Training**: MSE loss on next-patch prediction; trained on 100B time points; masked input
+  patching (BERT-style random patch masking)
+- **Max context**: 512 patches = 16,384 timesteps
+- **TimesFM 2.0**: Added quantile prediction heads for probabilistic output
+- **Univariate**: Single-variate processing
+- **Structural class**: Decoder-only Transformer | Multi-output-patch-size | Semi-autoregressive | Frequency token
+
+#### TimeMoE (2024)
+**Paper**: "TimeMoE: Billion-Scale Time Series Foundation Models with Mixture of Experts"
+
+- **Backbone**: Decoder-only Transformer with **Sparse MoE FFN layers**. LLaMA-style
+  (RMSNorm, SwiGLU, RoPE, Grouped Query Attention)
+- **Model sizes**:
+
+  | Variant | Total Params | Active Params | Experts | Top-k |
+  |---------|-------------|---------------|---------|-------|
+  | 50M (dense) | 50M | 50M | None (baseline) | - |
+  | 200M | 200M | 110M | 8 | 2 |
+  | 1.1B | 1.1B | 310M | 16 | 2 |
+  | 2.4B | 2.4B | 600M | 16 | 2 |
+
+- **MoE mechanism**: Each FFN layer replaced by N expert SwiGLU FFNs. Router (learned linear)
+  selects top-k experts per token. Weighted sum of selected expert outputs. Load-balancing
+  auxiliary loss
+- **Attention**: Grouped Query Attention (GQA) -- fewer KV heads than query heads (e.g., 4:1)
+- **Input**: Non-overlapping patches -> Linear -> RoPE positional encoding
+- **Output**: Next-patch prediction via `Linear(d_model, patch_len)`. Autoregressive at patch level
+- **Training**: MSE loss + MoE load balancing; trained on Time-300B (~300B time points)
+- **Univariate**: Single-variate processing
+- **Structural class**: Decoder-only Transformer + Sparse MoE | GQA | Patch-autoregressive | Conditional computation
 
 ---
 
@@ -166,7 +282,11 @@ Input -> [Block]^N -> Output
 | **TSMixer** | [Temporal-MLP + Channel-MLP]^N -> Linear |
 | **KANAD** | Basis expand -> [Conv1d]^3 -> Linear |
 | **SegRNN** | Segment -> GRU-encode -> GRU-decode -> Linear |
-| **All 7 pretrained wrappers** | Linear/Quantize -> HF-Transformer -> Linear |
+| **Chronos** | Bin-tokenize -> T5 Enc-Dec -> Autoregressive token generation |
+| **Chronos2** | Bin-tokenize -> T5 Encoder -> Student-t prediction head |
+| **TimesFM** | Patch -> Causal Transformer -> Multi-size output patch heads |
+| **TimeMoE** | Patch -> Causal Transformer+MoE -> Next-patch prediction |
+| **TiRex** | Patch -> xLSTM (sLSTM+mLSTM blocks) -> Next-patch prediction |
 
 ### 3.2 Parallel Branches Merging (Fan-out / Fan-in)
 
@@ -209,6 +329,8 @@ Input -> Encoder -> [context] -> Decoder -> Output
 | **TemporalFusionTransformer** | LSTM seq2seq + interpretable attention | Layer-coupled with static context conditioning |
 | **ETSformer** | Layer-by-layer growth/season passing | Each decoder layer receives its corresponding encoder layer's output |
 | **TiDE** | Dense MLP encoder-decoder | No attention; ResBlock chain with temporal decoder |
+| **Chronos** | T5 encoder-decoder | Autoregressive token decoding with cross-attention |
+| **Sundial** | Causal Transformer encoder + Flow Matching decoder | Two-component: context encoder feeds velocity network |
 
 ### 3.4 Recursive Tree Structure
 
@@ -271,7 +393,11 @@ Variables are either looped over or folded into the batch dimension:
 | **WPMixer** | Shared weights, channel as batch dim |
 | **FiLM** | HiPPO per-channel |
 | **SegRNN** | `B*C` batch folding for encoding (channel embedding for decoding) |
-| **All 7 pretrained wrappers** | Python for-loop over channels |
+| **Chronos / Chronos2** | Univariate by design |
+| **Sundial** | Univariate by design |
+| **TiRex** | Univariate by design |
+| **TimesFM** | Univariate by design |
+| **TimeMoE** | Univariate by design |
 
 ### 4.2 Channel-Mixing by Embedding
 
@@ -308,6 +434,7 @@ Models with dedicated mechanisms for cross-variable interaction:
 | **TSMixer** | `nn.Linear(enc_in, d_model)` -> ReLU -> `nn.Linear(d_model, enc_in)` per block | MLP channel mixer |
 | **LightTS** | `nn.Linear(enc_in, enc_in)` in layer_3 (identity-initialized) | Weak channel mixing (identity init) |
 | **TemporalFusionTransformer** | VariableSelectionNetwork (learned soft attention over variables) | Gated variable importance weighting |
+| **Moirai** | Any-Variate Attention: structured mask enables cross-variate + temporal attention | Handles arbitrary variate counts via attention masking |
 | **FreTS** | FFT along channel dimension + complex linear (when enabled) | Frequency-domain channel mixing |
 
 ### 4.4 Learned Graph Structure
@@ -346,7 +473,10 @@ Models that process the entire time series at one resolution:
 | **TemporalFusionTransformer** | LSTM + attention at original resolution |
 | **FreTS** | Single-scale frequency domain |
 | **TimeFilter** | Single patch size, graph-learned temporal structure |
-| **All 7 pretrained wrappers** | Single resolution |
+| **Chronos / Chronos2** | Single resolution (per-token / per-patch) |
+| **Sundial** | Single resolution (patch-based) |
+| **TiRex** | Single resolution (patch-based) |
+| **TimeMoE** | Single resolution (patch-based) |
 
 ### 5.2 Downsampling Pyramid (Encoder Side)
 
@@ -379,6 +509,8 @@ Models that process the entire time series at one resolution:
 | **FiLM** | Multiple lookback windows: [1x, 2x, 4x] * pred_len | Each processed independently through HiPPO + SpectralConv |
 | **MultiPatchFormer** | Four patch sizes (8, 16, 24, 32) | Feature concatenation from all scales |
 | **LightTS** | Two chunk sampling strategies (continuous + interval) | Different temporal views of same data |
+| **Moirai** | Multiple Patch Size Projection (MPSP) | Frequency-aware patch size selection; each has own projection |
+| **TimesFM** | Multiple output patch sizes {1,8,16,32,64,128} | Asymmetric: fixed input patch (32) + variable output patch |
 
 ### 5.6 Wavelet Multi-Resolution
 
@@ -404,7 +536,11 @@ Models whose core operations stay in the time domain:
 **DLinear, LightTS, TiDE, TSMixer, Transformer, Reformer, Nonstationary_Transformer,
 PatchTST, PAttn, iTransformer, TimeXer, MultiPatchFormer, Crossformer, Pyraformer,
 TemporalFusionTransformer, Mamba, MambaSimple, SegRNN, SCINet, KANAD, TimeFilter,
-all 7 pretrained wrappers**
+Chronos, Chronos2, Moirai, TimesFM, TimeMoE**
+
+Note: Sundial's flow matching decoder operates in a continuous latent space (noise -> forecast
+via ODE integration) but the context encoder is time-domain. TiRex uses xLSTM which is
+time-domain recurrent.
 
 ### 6.2 Frequency Domain (FFT/DFT)
 
@@ -499,35 +635,48 @@ Using only the final timestep's hidden state to generate the full horizon:
 
 | Model | Mechanism |
 |-------|-----------|
-| **Chronos** | `hidden[:, -1, :] -> Linear(d, pred_len)` |
-| **Sundial** | `hidden[:, -1, :] -> Linear(d, pred_len)` |
-| **TimeMoE** | `hidden[:, -1, :] -> Linear(d, pred_len)` |
 | **Pyraformer** | `enc_out[:, -1, :] -> Linear(multi_scale_d, pred_len * enc_in)` |
 
-### 7.5 Tail-Positions Per-Step Projection
-
-Using the last `pred_len` hidden states, each mapped to a scalar:
+### 7.5 Autoregressive Token/Patch Decoding
 
 | Model | Mechanism |
 |-------|-----------|
-| **Chronos2** | `hidden[:, -pred_len:, :] -> Linear(d, 1)` per position |
-| **Moirai** | Same pattern |
-| **TiRex** | Same pattern |
-| **TimesFM** | Same pattern |
+| **Chronos** | T5 decoder generates discrete bin tokens one-by-one via cross-entropy; categorical distribution over 4096 bins per step |
+| **TiRex** | xLSTM produces next-patch predictions; autoregressive at patch level |
+| **TimeMoE** | Causal Transformer+MoE produces next-patch prediction; autoregressive at patch level |
 
-### 7.6 Semi-Autoregressive
+### 7.6 Semi-Autoregressive Patched Decoding
+
+| Model | Mechanism |
+|-------|-----------|
+| **TimesFM** | Asymmetric patching: input patches of 32, output patches of {1,8,16,32,64,128}. Autoregressive across patches but parallel within each output patch. Selects largest output patch ≤ remaining horizon |
+
+### 7.7 Single-Pass Distributional Output
+
+| Model | Mechanism |
+|-------|-----------|
+| **Chronos2** | T5 encoder (single pass) -> prediction head outputs Student's t-distribution params (location, scale, df) per timestep |
+| **Moirai** | Masked encoder (single pass) -> mixture distribution heads: Student's t / Normal / NegBin / LogNormal with 10-20 components per timestep |
+
+### 7.8 Flow-Based Generative Output
+
+| Model | Mechanism |
+|-------|-----------|
+| **Sundial** | Context encoder produces conditioning -> Flow matching decoder: start from Gaussian noise, integrate learned velocity field ODE from t=0 to t=1 -> forecast sample. Multiple samples give prediction intervals. Can model **arbitrary** distribution shapes |
+
+### 7.9 Semi-Autoregressive (Iterative Refinement)
 
 | Model | Mechanism |
 |-------|-----------|
 | **MultiPatchFormer** | 8 sequential steps, each conditioned on encoding + previous predictions |
 
-### 7.7 Segment-Based Recurrent
+### 7.10 Segment-Based Recurrent
 
 | Model | Mechanism |
 |-------|-----------|
 | **SegRNN** | GRU decodes each output segment with channel+position embeddings |
 
-### 7.8 Basis Reconstruction
+### 7.11 Basis Reconstruction
 
 | Model | Mechanism |
 |-------|-----------|
@@ -544,7 +693,8 @@ Subtract per-instance mean and divide by stdev before processing; reverse after:
 
 **Used by**: Informer (short-term), Reformer (short-term), Nonstationary_Transformer,
 PatchTST, iTransformer, TimesNet, TiDE, FiLM, WPMixer, Mamba, MambaSimple, Koopa,
-MSGNet, TimeFilter, all 7 pretrained wrappers
+MSGNet, TimeFilter, Chronos (mean scaling), Moirai (RevIN), Sundial, TiRex, TimesFM,
+TimeMoE
 
 **Not used by**: Transformer, Autoformer, FEDformer, ETSformer, Pyraformer, Crossformer,
 DLinear, TSMixer, LightTS, FreTS, KANAD
@@ -576,6 +726,13 @@ Grouping consecutive timesteps into tokens:
 | **SegRNN** | seg_len | No | Segments for GRU |
 | **WPMixer** | patch_len | Configurable | Patches on wavelet coefficients |
 | **TimeFilter** | patch_len | No (stride=patch_len) | Cross-variate patches |
+| **Moirai** | Multiple sizes (MPSP) | No | Frequency-aware selection |
+| **Sundial** | ~64 (configurable) | No | Non-overlapping |
+| **TiRex** | Configurable | No | Non-overlapping |
+| **TimesFM** | 32 (input), {1-128} (output) | No | Asymmetric I/O patch sizes |
+| **TimeMoE** | Configurable | No | Non-overlapping |
+
+Note: Chronos/Chronos2 use per-timestep discrete tokenization, not patching.
 
 ### 8.4 Residual Connection Patterns
 
@@ -594,8 +751,8 @@ Grouping consecutive timesteps into tokens:
 
 | Causal (masked) | Bidirectional (unmasked) |
 |-----------------|------------------------|
-| Transformer (decoder), Informer (decoder), Autoformer (decoder), FEDformer (decoder), Nonstationary_Transformer (decoder), MultiPatchFormer (temporal encoder), TemporalFusionTransformer, Pyraformer (pyramid mask), Chronos2 (BERT -- bidirectional despite being a "forecast" model) | Transformer (encoder), PatchTST, PAttn, iTransformer, Crossformer, TimeXer (self-attention on patches) |
-| Moirai, Sundial, TiRex, TimesFM, TimeMoE (GPT-2 causal) | Chronos (T5 encoder, bidirectional) |
+| Transformer (decoder), Informer (decoder), Autoformer (decoder), FEDformer (decoder), Nonstationary_Transformer (decoder), MultiPatchFormer (temporal encoder), TemporalFusionTransformer, Pyraformer (pyramid mask) | Transformer (encoder), PatchTST, PAttn, iTransformer, Crossformer, TimeXer (self-attention on patches) |
+| Chronos (T5 decoder, causal), Sundial (context encoder, causal), TiRex (xLSTM, causal), TimesFM (decoder-only, causal), TimeMoE (decoder-only+MoE, causal) | Chronos (T5 encoder, bidirectional), Chronos2 (T5 encoder-only, bidirectional), Moirai (masked encoder, structured AVA mask) |
 
 ---
 
@@ -623,7 +780,13 @@ TimeXer:            Attn-Self+Cross | EncOnly | CrossVar-GlobalToken | SingleSca
 PAttn:              Attn-Full(patches,1L) | EncOnly | ChanIndep | SingleScale-Patch | TimeDomain | FlattenHead
 MultiPatchFormer:   Attn-Causal+Channel | TwoPhase | ChanIndep->ChanMix | MultiScale-4Patch | TimeDomain | SemiAutoregressive
 TFT:                LSTM+InterpAttn | EncDec | VarSelection | SingleScale | TimeDomain | GatedOutput
-TimeMoE:            GPT2-Causal | SeqChain | ChanIndep-Loop | SingleScale | TimeDomain | LastHiddenProj
+Chronos:            T5-EncDec | EncDec | Univariate | SingleScale | TimeDomain | AR-TokenDecoding(categorical)
+Chronos2:           T5-EncOnly | EncOnly | Univariate | SingleScale | TimeDomain | SinglePass-StudentT
+Moirai:             MaskedEnc+AVA | EncOnly | CrossVar-AVA | MultiPatch-MPSP | TimeDomain | SinglePass-MixtureDistrib
+Sundial:            CausalTransformer+FlowMatch | TwoComponent | Univariate | SingleScale-Patch | TimeDomain+Latent | FlowODE-Generative
+TiRex:              xLSTM(sLSTM+mLSTM) | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
+TimesFM:            DecOnly-Transformer | SeqChain | Univariate | MultiOutputPatch | TimeDomain | SemiAR-AsymPatch
+TimeMoE:            DecOnly-Transformer+SparseMoE | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
 
 DLinear:            Linear | ParallelMerge | ChanIndep | SingleScale | TimeDomain | DecompAdditive
 LightTS:            Linear+LeakyReLU | ParallelMerge+Highway | WeakChanMix | DualSampling | TimeDomain | DirectProj+Skip
@@ -665,13 +828,16 @@ with LSH and drops the decoder (encoder-only with appended placeholders).
 decomposition in encoder and decoder, accumulated trend). They differ only in the attention
 replacement mechanism (AutoCorrelation vs. Fourier/Wavelet blocks).
 
-### Class D: GPT-2 Wrapper with Quantized Tokens
-**Moirai**, **TiRex**, **TimesFM** are structurally identical: `quantize -> GPT2Model -> Linear(d,1)`.
-They differ only in hidden dimension and layer count (256/6, 512/8, 1024/24).
+### Class D: Causal Decoder-Only Patch Transformer (Foundation)
+**TimesFM** and **TimeMoE** share the same high-level topology: patch input -> causal
+decoder-only transformer -> next-patch prediction. They differ primarily in that TimeMoE
+uses Sparse MoE FFN layers and GQA, while TimesFM uses dense FFN with asymmetric output
+patch sizes. Both use RoPE and are univariate.
 
-### Class E: GPT-2 Wrapper with Continuous Projection
-**Sundial** and **TimeMoE** are structurally identical: `Linear(1,d) -> GPT2 -> Linear(d, pred_len)`.
-**Chronos** is the same topology but uses T5 encoder instead of GPT-2.
+### Class E: Patch-Autoregressive Recurrent (Foundation)
+**TiRex** (xLSTM) shares the same patch-in, next-patch-out autoregressive topology as
+TimesFM/TimeMoE but replaces the Transformer backbone with xLSTM blocks. The matrix
+memory in mLSTM is functionally similar to linear attention with decaying state.
 
 ### Class F: FFT-Period + 2D Processing
 **TimesNet** and **MSGNet** share the FFT period detection and 1D-to-2D temporal reshape.
@@ -706,7 +872,6 @@ graph convolution + attention.
 | TimeXer | Self+Cross | Enc-Only | GlobalToken | Patch | Time | FlattenHead |
 | MultiPatchFormer | Causal+Chan | TwoPhase | Indep->Mix | 4-Patch | Time | Semi-AR |
 | TFT | LSTM+InterpAttn | Enc-Dec | VarSelect | Single | Time | Gated |
-| TimeMoE | GPT-2 | SeqChain | Indep-Loop | Single | Time | LastHidden |
 | DLinear | Linear | Parallel-Merge | Independent | Single | Time | Decomp-Add |
 | LightTS | Linear+Act | Parallel+Highway | Weak-Mix | DualSample | Time | Direct+Skip |
 | TiDE | MLP-ResBlock | SeqChain+Skip | Indep-Loop | Single | Time | Direct+Skip |
@@ -724,12 +889,13 @@ graph convolution + attention.
 | Koopa | Koopman+DMD | DualStream+Iter | Mixed | DualStream | Koopman | IterAccum |
 | KANAD | 1D-Conv+Cos | SeqChain | Independent | Single | Time | Direct-Proj |
 | TimeFilter | GCN+MoE | SeqChain | Graph-Learned | Single-Patch | Time | Direct-Proj |
-| Chronos | T5-Enc | SeqChain | Indep-Loop | Single | Time | LastHidden |
-| Chronos2 | BERT | SeqChain | Indep-Loop | Single | Time | TailPositions |
-| Moirai | GPT-2 | SeqChain | Indep-Loop | Single | Time | TailPositions |
-| Sundial | GPT-2 | SeqChain | Indep-Loop | Single | Time | LastHidden |
-| TiRex | GPT-2 | SeqChain | Indep-Loop | Single | Time | TailPositions |
-| TimesFM | GPT-2 | SeqChain | Indep-Loop | Single | Time | TailPositions |
+| Chronos | T5-EncDec | Enc-Dec | Univariate | Single | Time | AR-TokenDecode(categorical) |
+| Chronos2 | T5-EncOnly | Enc-Only | Univariate | Single | Time | SinglePass-StudentT |
+| Moirai | MaskedEnc+AVA | Enc-Only | AVA-CrossVar | MultiPatch(MPSP) | Time | MixtureDistrib |
+| Sundial | CausalTrans+Flow | TwoComponent | Univariate | Patch | Time+Latent | FlowODE-Generative |
+| TiRex | xLSTM(s+mLSTM) | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
+| TimesFM | DecOnly-Trans | SeqChain | Univariate | MultiOutputPatch | Time | SemiAR-AsymPatch |
+| TimeMoE | DecOnly+SparseMoE | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
 
 ---
 
@@ -738,14 +904,14 @@ graph convolution + attention.
 ### 1. Naming vs. Structure Disconnect
 Model names frequently misrepresent computational structure. "Transformer" models span at
 least 5 distinct attention mechanisms. "MLP-based" models range from zero-nonlinearity linear
-maps (DLinear) to sophisticated multi-scale wavelet-domain mixers (WPMixer). The 7 "foundation
-models" are structurally simplified proxies, not faithful reproductions.
+maps (DLinear) to sophisticated multi-scale wavelet-domain mixers (WPMixer).
 
 ### 2. Channel Handling Is the Primary Structural Divide
 The most impactful architectural decision is how inter-variate relationships are modeled:
-- **13 models** are strictly channel-independent
+- **6 foundation models** are strictly univariate by design (Chronos, Chronos2, Sundial, TiRex, TimesFM, TimeMoE)
+- **13 non-foundation models** are strictly channel-independent
 - **13 models** mix channels only through the input embedding (Conv1d)
-- **8 models** have explicit cross-variable mechanisms
+- **9 models** have explicit cross-variable mechanisms (including Moirai's Any-Variate Attention)
 - **2 models** learn graph structure between variables
 - **2 models** are configurable
 
@@ -762,11 +928,21 @@ convergence on a standard multi-scale approach.
   detection or signal decomposition, but the main computation is in time/spatial domain
 
 ### 5. True Encoder-Decoder Architectures Are Becoming Rare
-Among non-wrapper models, encoder-only or encoder-with-direct-projection is the dominant
+Among task-specific models, encoder-only or encoder-with-direct-projection is the dominant
 pattern (PatchTST, iTransformer, TimeMixer, TimeXer, etc.). Full encoder-decoder with
-cross-attention is mainly found in older Transformer variants and TFT.
+cross-attention is mainly found in older Transformer variants and TFT. Among foundation
+models, Chronos (T5 enc-dec) and Sundial (transformer + flow matching) are the exceptions;
+the rest are decoder-only or encoder-only.
 
-### 6. Structural Simplicity Can Match Complexity
+### 6. Foundation Models Converge on Patch-Autoregressive Design
+Despite diverse naming and marketing, 5 of 7 foundation models share the same high-level
+pattern: **patch input -> causal backbone -> next-patch prediction**. They diverge primarily in:
+- Backbone choice: Transformer (TimesFM, TimeMoE), xLSTM (TiRex)
+- Scaling strategy: Dense (TimesFM, TiRex) vs. Sparse MoE (TimeMoE)
+- Output distribution: Point prediction (TimesFM v1), Student's t (Chronos2), Mixture
+  (Moirai), Flow-based (Sundial), Categorical over bins (Chronos)
+
+### 7. Structural Simplicity Can Match Complexity
 The simplest models (DLinear: 2 linear layers; PAttn: 1 attention layer) remain competitive
 benchmarks. This suggests that the inductive biases (decomposition, normalization, patching)
 matter as much as or more than the core computation primitive.
