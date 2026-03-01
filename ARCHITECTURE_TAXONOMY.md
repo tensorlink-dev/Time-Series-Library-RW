@@ -22,6 +22,7 @@
 9. [Detailed Model Profiles](#9-detailed-model-profiles)
 10. [Structural Equivalence Classes](#10-structural-equivalence-classes)
 11. [Master Classification Matrix](#11-master-classification-matrix)
+12. [Phylogenetic Analysis](#12-phylogenetic-analysis)
 
 ---
 
@@ -982,3 +983,505 @@ multi-step prediction. They diverge primarily in:
 The simplest models (DLinear: 2 linear layers; PAttn: 1 attention layer) remain competitive
 benchmarks. This suggests that the inductive biases (decomposition, normalization, patching)
 matter as much as or more than the core computation primitive.
+
+---
+
+## 12. Phylogenetic Analysis
+
+> A systematic reconstruction of architectural ancestry and divergence, treating each model
+> as a taxon and structural features as heritable characters. This analysis identifies
+> monophyletic clades (true lineages), convergent evolution (homoplasy), horizontal transfer
+> events (trait borrowing across lineages), and vestigial structures.
+
+### 12.1 Methodology
+
+**Outgroup**: Classical statistical methods (ARIMA, ETS, Exponential Smoothing) — no learned
+parameters, no neural computation. Used to root the tree and polarize character states.
+
+**Character system**: 12 discrete structural characters derived from the 6-axis taxonomy
+(Section 1). Character states are coded as ordered or unordered multi-state. The tree is
+constructed via **maximum parsimony** — minimizing the total number of character state changes
+needed to explain the observed distribution of traits.
+
+**Reticulation**: Unlike biological evolution, architectural evolution is **reticulate** —
+models openly borrow innovations from unrelated lineages. The primary tree represents the
+dominant structural ancestry; dashed annotations mark horizontal transfer events.
+
+### 12.2 Character State Matrix
+
+Each model is scored on 12 phylogenetically informative structural characters:
+
+```
+Character Key:
+  A: Primary Computation      0=Linear  1=Conv  2=Recurrent  3=Attention  4=SSM  5=Graph  6=Operator
+  B: Encoder-Decoder          0=No (enc-only/chain)  1=Yes (cross-attn)  2=Two-component
+  C: Patching                 0=None  1=Single-scale  2=Multi-scale  3=Asymmetric
+  D: Channel Treatment        0=Independent  1=Embed-mix  2=Explicit-cross  3=Graph
+  E: Decomposition            0=None  1=Input-only  2=Progressive (every layer)
+  F: Frequency-Domain Ops     0=None  1=Auxiliary  2=Core
+  G: Recurrent Component      0=None  1=LSTM/GRU  2=SSM  3=sLSTM
+  H: Instance Normalization   0=No  1=Yes
+  I: Multi-Scale Processing   0=Single  1=Yes
+  J: Autoregressive Output    0=No (direct)  1=Full-AR  2=Semi-AR  3=Distributional
+  K: Pre-trained Foundation   0=No  1=Yes
+  L: Learned Graph Structure  0=No  1=Yes
+```
+
+```
+                               A  B  C  D  E  F  G  H  I  J  K  L
+                              ── ── ── ── ── ── ── ── ── ── ── ──
+Transformer                    3  1  0  1  0  0  0  0  0  0  0  0
+Informer                       3  1  0  1  0  0  0  1  1  0  0  0
+Reformer                       3  0  0  1  0  0  0  1  0  0  0  0
+Autoformer                     3  1  0  1  2  2  0  0  1  0  0  0
+FEDformer                      3  1  0  1  2  2  0  0  1  0  0  0
+ETSformer                      3  1  0  1  2  2  0  0  1  0  0  0
+NS_Transformer                 3  1  0  1  0  0  0  1  0  0  0  0
+Pyraformer                     3  0  0  1  0  0  0  0  1  0  0  0
+Crossformer                    3  1  1  2  0  0  0  0  1  0  0  0
+PatchTST                       3  0  1  0  0  0  0  1  0  0  0  0
+PAttn                          3  0  1  0  0  0  0  1  0  0  0  0
+iTransformer                   3  0  0  2  0  0  0  1  0  0  0  0
+TimeXer                        3  0  1  2  0  0  0  1  0  0  0  0
+MultiPatchFormer               3  0  2  2  0  0  0  1  1  2  0  0
+TimeMixer                      0  0  0  0  2  1  0  1  1  0  0  0
+TFT                            3  1  0  2  0  0  1  0  0  0  0  0
+DLinear                        0  0  0  0  1  0  0  0  0  0  0  0
+LightTS                        0  0  0  0  0  0  0  0  1  0  0  0
+TiDE                           0  1  0  0  0  0  0  1  0  0  0  0
+TSMixer                        0  0  0  2  0  0  0  0  0  0  0  0
+FreTS                          0  0  0  2  0  2  0  0  0  0  0  0
+WPMixer                        0  0  1  0  0  0  0  1  1  0  0  0
+FiLM                           0  0  0  0  0  2  2  1  1  0  0  0
+TimesNet                       1  0  0  1  0  1  0  1  1  0  0  0
+MICN                           1  0  0  1  1  0  0  0  1  0  0  0
+SCINet                         1  0  0  1  0  0  0  0  1  0  0  0
+KANAD                          1  0  0  0  0  0  0  0  0  0  0  0
+MSGNet                         5  0  0  3  0  1  0  1  1  0  0  1
+TimeFilter                     5  0  1  3  0  0  0  1  0  0  0  1
+Mamba                          4  0  0  1  0  0  2  1  0  0  0  0
+MambaSimple                    4  0  0  1  0  0  2  1  0  0  0  0
+SegRNN                         2  0  0  0  0  0  1  0  0  0  0  0
+Koopa                          6  0  0  0  0  1  0  1  1  0  0  0
+Chronos                        3  1  0  0  0  0  0  1  0  1  1  0
+Chronos-Bolt                   3  1  1  0  0  0  0  1  0  3  1  0
+Chronos-2                      3  0  1  2  0  0  0  1  0  3  1  0
+Moirai                         3  0  2  2  0  0  0  1  1  3  1  0
+Sundial                        3  2  1  0  0  0  0  1  0  3  1  0
+TiRex                          2  0  1  0  0  0  3  1  0  3  1  0
+TimesFM                        3  0  3  0  0  0  0  1  1  2  1  0
+TimeMoE                        3  0  0  0  0  0  0  1  1  2  1  0
+```
+
+### 12.3 The Phylogenetic Tree
+
+The following cladogram represents the maximum-parsimony reconstruction of architectural
+lineage. Branch lengths are not proportional to time or divergence — this is a topology-only
+tree. Annotations at nodes indicate **synapomorphies** (shared derived traits) that define
+each clade.
+
+Symbols: `†` = horizontal transfer event, `‡` = convergent trait loss, `§` = vestigial
+character, `*` = polyphyletic placement.
+
+```
+OUTGROUP: Statistical Methods (ARIMA, ETS)
+│
+NEURAL SEQUENCE MODELS (stem: learned parameters + gradient descent)
+│
+├──── RECURRENT CLADE ·································· [Synapomorphy: sequential hidden state]
+│     │
+│     ├──── Classical RNN/LSTM (stem group, not in repo)
+│     │     │
+│     │     ├──── SegRNN ······························· segment-level GRU
+│     │     │
+│     │     └──── TFT ································· LSTM + interpretable attention †Transformer
+│     │
+│     ├──── Structured SSM (S4/HiPPO lineage)
+│     │     │
+│     │     ├──── FiLM ································ HiPPO-LegT + spectral conv
+│     │     │
+│     │     └──── Selective SSM
+│     │           ├──── Mamba ·························· library-based selective scan
+│     │           └──── MambaSimple ···················· from-scratch selective scan
+│     │
+│     └──── xLSTM (modernized LSTM)
+│           └──── TiRex ······························· sLSTM-only, NaN-rollout, quantile output
+│
+├──── TRANSFORMER RADIATION ···························· [Synapomorphy: scaled dot-product attention]
+│     │
+│     ├──── STEM TRANSFORMERS ·························· [Synapomorphy: encoder-decoder + cross-attention]
+│     │     │
+│     │     ├──── Transformer ·························· ancestral form (vanilla enc-dec)
+│     │     │
+│     │     ├──── EFFICIENCY SUBCLADE ·················· [Synapomorphy: sub-quadratic attention]
+│     │     │     ├──── Informer ······················· ProbSparse + distillation pyramid
+│     │     │     ├──── Reformer ······················· LSH attention (decoder lost ‡)
+│     │     │     └──── Pyraformer ····················· pyramid sparse mask (decoder lost ‡)
+│     │     │
+│     │     ├──── DECOMPOSITION SUBCLADE ··············· [Synapomorphy: progressive trend-seasonal in enc+dec]
+│     │     │     ├──── Autoformer ····················· FFT cross-correlation replaces attention
+│     │     │     ├──── FEDformer ····················· Fourier/Wavelet blocks replace attention
+│     │     │     └──── ETSformer ····················· exponential smoothing (attention §vestigial)
+│     │     │
+│     │     ├──── NS_Transformer ······················ derived: tau/delta de-stationary modulation
+│     │     │
+│     │     └──── Crossformer ························· derived: two-stage (time+dim) + seg-merging
+│     │
+│     ├──── CROWN TRANSFORMERS ························ [Synapomorphy: decoder lost, direct projection]
+│     │     │
+│     │     ├──── PATCH SUBCLADE ······················ [Synapomorphy: patching + channel independence]
+│     │     │     ├──── PatchTST ······················ overlapping patches, chan-indep
+│     │     │     │     └──── PAttn ··················· reduced to 1 encoder layer
+│     │     │     ├──── TimeXer ······················· patches + exogenous cross-attention
+│     │     │     └──── MultiPatchFormer ·············· multi-scale patches + channel mixing stage
+│     │     │
+│     │     └──── INVERTED SUBCLADE
+│     │           └──── iTransformer ·················· variates-as-tokens (axis inversion)
+│     │
+│     └──── FOUNDATION TRANSFORMERS ··················· [Synapomorphy: large-scale pre-training + zero-shot]
+│           │
+│           ├──── T5 LINEAGE ·························· [Synapomorphy: T5 backbone]
+│           │     ├──── Chronos ······················· enc-dec, discrete bin tokenization, full AR
+│           │     ├──── Chronos-Bolt ·················· enc-dec (1-token decoder), patches, quantile
+│           │     └──── Chronos-2 ····················· enc-only (decoder lost ‡), Group Attention
+│           │
+│           ├──── MASKED ENCODER
+│           │     └──── Moirai ························ Any-Variate Attention, mixture distributions
+│           │
+│           └──── CAUSAL DECODER-ONLY
+│                 ├──── TimesFM ······················· asymmetric patching, semi-AR
+│                 ├──── TimeMoE ······················· sparse MoE + shared expert, point-wise tokens
+│                 └──── Sundial ······················· + flow matching decoder (two-component)
+│
+├──── LINEAR/MLP COUNTER-REVOLUTION ··················· [Synapomorphy: no attention mechanism]
+│     │
+│     ├──── PURE LINEAR
+│     │     └──── DLinear ····························· 2 linear layers + decomposition
+│     │
+│     ├──── MLP CHAIN
+│     │     ├──── TiDE ································ ResBlock encoder-decoder
+│     │     └──── TSMixer ····························· temporal + channel MLP alternating
+│     │
+│     ├──── DUAL-SAMPLING
+│     │     └──── LightTS ····························· continuous + interval chunk sampling
+│     │
+│     └──── DOMAIN-SHIFTED MLP
+│           ├──── FreTS ······························· FFT + complex linear
+│           └──── WPMixer ····························· wavelet domain + mixer
+│
+├──── CONVOLUTION CLADE ······························· [Synapomorphy: conv as primary primitive]
+│     │
+│     ├──── 1D TEMPORAL
+│     │     ├──── SCINet ······························ recursive binary tree, multiplicative coupling
+│     │     ├──── MICN ································ multi-scale down-iso-up sandwich
+│     │     └──── KANAD ······························· cosine basis expansion + conv
+│     │
+│     └──── 2D SPATIAL (FFT-RESHAPED)
+│           └──── TimesNet ···························· FFT period detect + 2D Inception
+│
+├──── GRAPH CLADE ····································· [Synapomorphy: learned graph topology over variates]
+│     ├──── MSGNet ···································· FFT periods + GCN diffusion †Attention †FFT
+│     └──── TimeFilter ································ bilinear graph + MoE structured masks
+│
+├──── OPERATOR-THEORETIC
+│     └──── Koopa ····································· Koopman operators + DMD least-squares
+│
+└──── MULTI-SCALE MIXING
+      └──── TimeMixer ································· downsample pyramid + bidirectional MLP mixing *
+```
+
+`*` TimeMixer is phylogenetically ambiguous — its MLP core places it near the Linear clade,
+but its multi-scale decomposition architecture is a derived character unique to this lineage.
+
+### 12.4 Clade Descriptions and Synapomorphies
+
+#### Recurrent Clade
+**Defining synapomorphy**: Sequential hidden state passed between timesteps. Information
+from the past is compressed into a fixed-dimensional state vector.
+
+Three distinct sub-lineages:
+- **Classical RNN/LSTM** → SegRNN (segments the sequence for efficiency), TFT (hybrid
+  with attention borrowed from Transformer clade — horizontal transfer)
+- **Structured SSM** → FiLM (HiPPO basis projects onto Legendre polynomials),
+  Mamba/MambaSimple (selective state space with input-dependent dynamics)
+- **xLSTM** → TiRex (uses only sLSTM variant; mLSTM ablated away as deleterious)
+
+The Recurrent clade is **paraphyletic** with respect to the Transformer clade — TFT
+bridges both lineages, and the SSM sub-lineage represents a fundamentally different
+mathematical framework (continuous-time ODEs discretized) despite sharing the sequential
+processing phenotype.
+
+#### Stem Transformers (Encoder-Decoder Retained)
+**Defining synapomorphy**: Encoder-decoder architecture with cross-attention linking
+encoder context to decoder output generation. This is the **ancestral state** inherited
+from the original Transformer (Vaswani et al., 2017).
+
+This clade underwent rapid diversification (2020-2022), producing three major sub-lineages:
+- **Efficiency subclade**: Addressed O(L^2) complexity — ProbSparse (Informer), LSH
+  (Reformer), pyramid masking (Pyraformer). Both Reformer and Pyraformer convergently
+  lost the decoder.
+- **Decomposition subclade**: Incorporated trend-seasonal decomposition into every
+  encoder and decoder layer. Progressively replaced attention with frequency-domain
+  operations, culminating in ETSformer where attention is vestigial (replaced by
+  exponential smoothing).
+- **Single-innovation offshoots**: NS_Transformer (de-stationary modulation) and
+  Crossformer (two-stage attention + segment merging) each add one major derived trait.
+
+#### Crown Transformers (Encoder-Only)
+**Defining synapomorphy**: Loss of the decoder. Output is generated by direct projection
+from encoder representations, not by autoregressive or cross-attended decoding.
+
+This represents the dominant modern topology. The **Patch subclade** (PatchTST, PAttn,
+TimeXer, MultiPatchFormer) combines decoder loss with patching and (initially) channel
+independence — this combination proved highly effective and triggered a rapid radiation.
+The **Inverted subclade** (iTransformer) is a singleton that independently lost the
+decoder while evolving the unique axis-inversion trait.
+
+#### Foundation Transformers
+**Defining synapomorphy**: Large-scale pre-training enabling zero-shot forecasting on
+unseen datasets. This is a behavioral/training-regime synapomorphy rather than a purely
+structural one.
+
+Three structural sub-lineages:
+- **T5 lineage** (Chronos → Chronos-Bolt → Chronos-2): A clear anagenetic series.
+  Chronos inherited T5's enc-dec; Chronos-Bolt optimized it (single-token decoder);
+  Chronos-2 lost the decoder and gained Group Attention (cross-series capability).
+- **Masked encoder** (Moirai): Independent origin. Any-Variate Attention is a unique
+  derived trait enabling arbitrary variate counts.
+- **Causal decoder-only** (TimesFM, TimeMoE, Sundial): Share the decoder-only Transformer
+  backbone. Diverge in tokenization (patches vs. point-wise), output (semi-AR vs.
+  multi-resolution vs. flow-based), and computation (dense vs. sparse MoE).
+
+Note: **TiRex** is a foundation model by training regime but belongs to the **Recurrent
+clade** by structural ancestry (sLSTM backbone). This is analogous to whales being mammals
+despite living in the ocean — behavioral convergence does not override structural lineage.
+
+#### Linear/MLP Counter-Revolution
+**Defining synapomorphy**: Complete absence of attention mechanism. This clade emerged
+as a reaction to Transformer dominance, demonstrating that simpler architectures can be
+competitive (DLinear, 2022). The clade subsequently diversified into MLP chains (TiDE,
+TSMixer), dual-sampling strategies (LightTS), and domain-shifted variants that perform
+MLP operations in frequency (FreTS) or wavelet (WPMixer) space.
+
+#### Convolution Clade
+**Defining synapomorphy**: Convolution as the primary sequence-mixing primitive. Splits
+into 1D temporal convolution (SCINet, MICN, KANAD) and 2D spatial convolution after
+FFT-based temporal reshape (TimesNet). The 2D branch represents a novel derived trait —
+no other clade reshapes 1D time series into 2D tensors for processing.
+
+#### Graph Clade
+**Defining synapomorphy**: Learned graph topology between variates. MSGNet and TimeFilter
+both construct adaptive adjacency matrices and propagate information via graph convolution.
+MSGNet additionally borrows FFT period detection (from TimesNet's lineage) and attention
+(from the Transformer clade) — a heavily polyphyletic taxon.
+
+### 12.5 Key Evolutionary Innovations
+
+Major innovations that triggered adaptive radiations or opened new ecological niches,
+ordered chronologically:
+
+```
+2017 ─── Scaled Dot-Product Attention ·········· Enabled the entire Transformer radiation
+         (Vaswani et al.)                        40+ architectural descendants in 8 years
+
+2020 ─── Approximate Attention ················· First attempt to break O(L²) barrier
+         (Informer, Reformer)                    Spawned efficiency subclade; later superseded
+
+2021 ─── Progressive Decomposition ············· Trend-seasonal split in every layer
+         (Autoformer)                            Led to FEDformer, ETSformer variants
+
+2021 ─── HiPPO / Structured SSMs ·············· Continuous-time state space models
+         (S4, FiLM)                              Parallel to attention; led to Mamba/SSM clade
+
+2022 ─── Channel Independence ················· Counter-intuitive: ignoring cross-var helps
+         (DLinear, PatchTST)                     Adopted across attention, linear, recurrent
+
+2022 ─── Linear Sufficiency ··················· Proved linear maps are competitive baselines
+         (DLinear)                                Triggered MLP counter-revolution clade
+
+2023 ─── Patching ····························· Reduce O(L²) to O((L/P)²); captures locality
+         (PatchTST)                              Adopted across all major clades; universal
+
+2023 ─── Selective State Spaces ··············· Input-dependent SSM dynamics
+         (Mamba)                                  Bridged SSM and attention paradigms
+
+2024 ─── Foundation Pre-training ·············· Large-scale pre-training for zero-shot
+         (Chronos, TimesFM, Moirai)              Independent origins in 3+ groups
+
+2024 ─── Any-Variate Attention (AVA) ·········· Handle arbitrary variate count via masking
+         (Moirai)                                 Structural solution to variable-count problem
+
+2024 ─── Sparse MoE for Time Series ··········· Conditional computation in TS foundation models
+         (TimeMoE, Moirai-MoE)                   Scale parameters without proportional compute
+
+2025 ─── Flow Matching Decoder ················ Non-parametric probabilistic output via ODE
+         (Sundial)                                Can model arbitrary distribution shapes
+
+2025 ─── Group Attention ····················· Cross-series attention via group IDs
+         (Chronos-2)                              Enables multivariate in an encoder-only model
+```
+
+### 12.6 Convergent Evolution (Homoplasy)
+
+The following traits evolved **independently** in multiple unrelated lineages, representing
+functional convergence rather than shared ancestry:
+
+#### 1. Loss of the Decoder
+Independently evolved at least 6 times:
+- Reformer (Efficiency subclade) — replaced with encoder + appended placeholders
+- Pyraformer (Efficiency subclade) — last-hidden-state projection
+- PatchTST (Crown Transformers) — flatten + linear head
+- iTransformer (Crown Transformers) — direct per-variate projection
+- Chronos-2 (Foundation T5 lineage) — encoder-only with quantile heads
+- Moirai (Foundation masked encoder) — born without a decoder
+
+**Functional explanation**: Encoder-only architectures are simpler, faster, and avoid
+error accumulation from autoregressive decoding. The decoder was the ancestral state
+inherited from machine translation; time-series forecasting does not require it.
+
+#### 2. Channel Independence
+Independently adopted by models from 4+ clades:
+- PatchTST, PAttn (Crown Transformers)
+- DLinear, TiDE (Linear/MLP)
+- SegRNN (Recurrent)
+- FiLM (SSM)
+- WPMixer (Domain-shifted MLP)
+- All univariate foundation models
+
+**Functional explanation**: Cross-variable interactions learned from limited data often
+capture noise rather than signal. Channel independence acts as a regularizer.
+
+#### 3. Patching / Segmentation
+Independently evolved in:
+- PatchTST, TimeXer, MultiPatchFormer (Crown Transformers)
+- Crossformer (Stem Transformer)
+- WPMixer (Domain-shifted MLP)
+- SegRNN (Recurrent)
+- All patch-based foundation models (TiRex, TimesFM, Moirai, Sundial, Chronos-Bolt/2)
+
+**Functional explanation**: Patching reduces sequence length (computational savings),
+captures local temporal patterns, and creates a natural "token" unit for sequence models.
+
+#### 4. Instance Normalization (RevIN-style)
+Adopted across nearly all clades: Transformers, Linear/MLP, SSM, Recurrent, and
+Foundation models. Present in 24+ of 40 models. This is the most widespread convergent
+trait — a near-universal adaptation.
+
+#### 5. FFT for Period Detection
+Used by TimesNet (Convolution clade) and MSGNet (Graph clade) for identical purpose:
+detect dominant periods via `torch.fft.rfft`, then reshape or window the time series
+accordingly. Clearly independent origins despite identical implementation.
+
+#### 6. Multi-Resolution Output
+TimesFM (multiple output patch sizes {1,8,...,128}) and TimeMoE (multi-resolution heads
+[1,8,32,64]) independently evolved the same strategy: multiple output heads predicting
+different horizon lengths, with dynamic selection at inference.
+
+### 12.7 Reticulate Events (Horizontal Transfer)
+
+Models that borrowed major structural innovations across clade boundaries:
+
+| Model | Home Clade | Borrowed Trait | Source Clade |
+|-------|-----------|---------------|-------------|
+| **TFT** | Recurrent (LSTM) | Interpretable multi-head attention | Transformer |
+| **MSGNet** | Graph | Full attention within period windows | Transformer |
+| **MSGNet** | Graph | FFT period detection | Convolution (TimesNet) |
+| **MultiPatchFormer** | Crown Transformer | Channel-wise mixing stage | Linear/MLP (TSMixer-like) |
+| **Crossformer** | Stem Transformer | Segment merging (downsampling) | Convolution |
+| **ETSformer** | Decomposition subclade | Exponential smoothing (replaced attention) | Statistical methods |
+| **Koopa** | Operator-theoretic | FFT preprocessing (FourierFilter) | Frequency-domain |
+| **Sundial** | Foundation Transformer | Flow matching (generative) | Generative models (external) |
+| **TimeMoE** | Foundation Transformer | Sparse MoE architecture | LLM scaling (DeepSeekMoE) |
+
+### 12.8 Vestigial Characters and Functional Loss
+
+In biological evolution, vestigial structures are remnants of ancestral traits that have
+lost their original function. Several architectural analogs exist:
+
+| Model | Vestigial Structure | Ancestral Function | Current State |
+|-------|--------------------|--------------------|--------------|
+| **ETSformer** | Attention mechanism | Primary sequence mixing | Replaced by exponential smoothing; attention scores exist but are not the dominant computation path |
+| **Reformer** | Decoder architecture | Autoregressive output generation | Decoder dropped; encoder appends placeholder tokens and projects directly |
+| **Chronos-Bolt** | T5 decoder | Autoregressive token generation | Reduced to single-token decoder (cross-attends once, then projects). Functionally non-autoregressive |
+| **LightTS** | Channel mixing layer | Cross-variable interaction | Identity-initialized linear (starts as no-op); may or may not learn meaningful mixing |
+| **Koopa** | Attention in original paper | Sequence modeling | Completely removed in this implementation; pure Koopman/DMD |
+
+### 12.9 Adaptive Radiations and Extinction Patterns
+
+#### Radiations (rapid diversification events)
+
+**The Transformer Radiation (2020-2022)**: The original Transformer spawned ~10 variants
+in 2 years, each modifying a different structural element (attention mechanism, decoder,
+decomposition, masking). This is analogous to the Cambrian explosion — a single body plan
+rapidly diversifying to fill ecological niches.
+
+**The Patching Radiation (2023-2024)**: After PatchTST demonstrated the effectiveness of
+patching + channel independence, rapid diversification produced PAttn, TimeXer,
+MultiPatchFormer, and influenced foundation model designs. Patching became a near-universal
+trait adopted across clades.
+
+**The Foundation Model Radiation (2024-2025)**: At least 7 independent foundation models
+emerged within ~18 months, from 4 different structural sub-lineages (T5-based,
+masked-encoder, decoder-only, recurrent). This represents parallel evolution toward the
+same ecological niche (zero-shot forecasting) from diverse structural origins.
+
+#### Extinctions (structural patterns that declined)
+
+**Full Encoder-Decoder** (declining): Among post-2023 models, almost none use the
+original encoder-decoder + cross-attention topology for task-specific forecasting.
+Encoder-only with direct projection has largely replaced it. The enc-dec topology
+survives primarily in foundation models (Chronos, Sundial) where it serves different
+purposes (autoregressive generation, conditioning).
+
+**Approximate Attention** (largely extinct): The ProbSparse (Informer) and LSH (Reformer)
+approaches to sub-quadratic attention have been superseded by patching, which achieves
+the same complexity reduction with better performance. No post-2023 model uses these
+mechanisms.
+
+**Per-Timestep Processing** (declining): Processing each individual timestep as a
+separate token (the ancestral Transformer approach) is being replaced by patch-level
+processing. Only TimeMoE (point-wise tokens) and original Chronos (per-bin tokens)
+retain per-timestep tokenization among recent models.
+
+### 12.10 Chronostratigraphic Summary
+
+Mapping architectural lineage against publication year reveals waves of innovation:
+
+```
+             2017    2019    2020    2021    2022    2023    2024    2025
+              │       │       │       │       │       │       │       │
+RECURRENT     │       │       │       │  TFT  │       │SegRNN │       │
+              │       │       │       │       │ FiLM  │       │       │
+SSM           │       │       │       │       │       │ Mamba  │MambaS │
+xLSTM         │       │       │       │       │       │       │ TiRex │
+              │       │       │       │       │       │       │       │
+STEM TRANS  Trans   │     Infmr  │ Autfmr│NS_Trn│Crssfmr│       │       │
+              │       │    Rfrmr │ FEDfmr│ETSfmr│       │       │       │
+              │       │       │  Pyrafmr│       │       │       │       │
+              │       │       │       │       │       │       │       │
+CROWN TRANS   │       │       │       │PtchTST│ iTrns │TimeXer│       │
+              │       │       │       │       │       │ PAttn │       │
+              │       │       │       │       │       │ MPFmr │       │
+              │       │       │       │       │       │       │       │
+FOUNDATION    │       │       │       │       │       │Chronos│Chrn-2 │
+              │       │       │       │       │       │ChrBolt│Sundial│
+              │       │       │       │       │       │Moirai │       │
+              │       │       │       │       │       │TimesFM│       │
+              │       │       │       │       │       │TimeMoE│       │
+              │       │       │       │       │       │       │       │
+LINEAR/MLP    │       │       │       │       │DLinear│ TiDE  │       │
+              │       │       │       │       │LghtTS │TSMixer│       │
+              │       │       │       │       │       │ FreTS │WPMxr  │
+              │       │       │       │       │       │       │       │
+CONV          │       │       │       │       │SCINet │TmsNet │ KANAD │
+              │       │       │       │       │ MICN  │       │       │
+              │       │       │       │       │       │       │       │
+GRAPH         │       │       │       │       │       │MSGNet │TmFltr │
+OPERATOR      │       │       │       │       │       │ Koopa │       │
+MULTI-SCALE   │       │       │       │       │       │TmMixr │       │
+```
+
+**Observed pattern**: The field progresses in waves — Transformer variants dominated
+2020-2022, the Linear/MLP counter-revolution peaked 2022-2023, and Foundation models
+dominate 2024-2025. Each wave partially displaces the previous one but does not eliminate
+it entirely, leaving a diverse ecosystem of coexisting architectures.
