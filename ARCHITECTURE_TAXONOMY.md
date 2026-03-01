@@ -148,17 +148,36 @@ Models that replace dot-product attention with frequency-domain operations:
   process kernel-generated synthetic data)
 - **Structural class**: Enc-Dec Transformer | Discrete tokenization | Autoregressive | Probabilistic
 
-#### Chronos-Bolt / Chronos2 (Amazon, 2024-2025)
+#### Chronos-Bolt (Amazon, 2024)
 
-- **Backbone**: T5 **encoder only** (drops the decoder). Sizes: Tiny (9M), Mini (21M),
-  Small (48M), Base (205M)
-- **Tokenization**: Same discrete bin tokenization as Chronos
-- **Core change**: **Non-autoregressive** -- generates all predictions in a single forward pass
-- **Output**: Prediction head outputs parameters of a **Student's t-distribution** per timestep
-  (location, scale, degrees of freedom) instead of categorical over bins
-- **Loss**: Negative log-likelihood of Student's t (not cross-entropy)
-- **Speed**: ~250x faster inference than original Chronos
-- **Structural class**: Enc-Only Transformer | Discrete input / Continuous output | Single-pass | Probabilistic
+- **Backbone**: T5 **encoder-decoder**, but decoder receives only a single start token
+  (NOT autoregressive). Sizes: Tiny (9M), Mini (21M), Small (48M), Base (205M)
+- **Input**: Instance normalization -> **patch-based** (non-overlapping patches, NOT discrete
+  bins). Patch values + attention mask concatenated, then projected via ResidualBlock to d_model
+- **Core change**: Single decoder token cross-attends to all encoder patches, then a
+  ResidualBlock projects to the full forecast in one shot. **Non-autoregressive**
+- **Output**: Direct **quantile forecasts** (multiple quantiles per timestep)
+- **Loss**: Quantile regression loss (not cross-entropy or NLL)
+- **Speed**: ~250x faster than original Chronos, 20x less memory
+- **Structural class**: Enc-Dec Transformer (single-token decoder) | Patch input | Single-pass | Quantile output
+
+#### Chronos-2 (Amazon, 2025)
+
+- **Backbone**: **Encoder-only** (drops the decoder entirely). T5 encoder with **RoPE**
+  replacing T5's relative position embeddings. Sizes: Small (28M), Base (120M)
+- **Input**: Robust scaling -> add meta features (time index + observation mask) ->
+  non-overlapping patches -> ResidualBlock embedding -> insert REG token (attention sink)
+  between context and future patches
+- **Group Attention** (the key innovation): Each transformer block alternates between:
+  - **Time Attention**: Standard self-attention across patches within a single series
+  - **Group Attention**: Attention across all series within a "group" at each patch index.
+    No positional encoding (series have no inherent order). Enables **multivariate** and
+    **covariate** support
+- **Group semantics**: Univariate = each series independent; Multivariate = all variates
+  of same entity share group ID; Covariates = targets + known covariates share group
+- **Output**: 21 fixed quantiles (0.01 to 0.99) via ResidualBlock projection on future patches
+- **Max context**: 8,192 timesteps (vs 2,048 for Bolt)
+- **Structural class**: Enc-Only Transformer | Time+Group dual attention | Multivariate-capable | Quantile output
 
 #### Moirai (Salesforce, 2024)
 **Paper**: "Unified Training of Universal Time Series Forecasting Transformers"
@@ -283,7 +302,8 @@ Input -> [Block]^N -> Output
 | **KANAD** | Basis expand -> [Conv1d]^3 -> Linear |
 | **SegRNN** | Segment -> GRU-encode -> GRU-decode -> Linear |
 | **Chronos** | Bin-tokenize -> T5 Enc-Dec -> Autoregressive token generation |
-| **Chronos2** | Bin-tokenize -> T5 Encoder -> Student-t prediction head |
+| **Chronos-Bolt** | Patch -> T5 Enc-Dec (single-token decoder) -> Quantile projection |
+| **Chronos-2** | Patch -> T5 Encoder (Time Attn + Group Attn) -> Quantile projection |
 | **TimesFM** | Patch -> Causal Transformer -> Multi-size output patch heads |
 | **TimeMoE** | Patch -> Causal Transformer+MoE -> Next-patch prediction |
 | **TiRex** | Patch -> xLSTM (sLSTM+mLSTM blocks) -> Next-patch prediction |
@@ -393,7 +413,7 @@ Variables are either looped over or folded into the batch dimension:
 | **WPMixer** | Shared weights, channel as batch dim |
 | **FiLM** | HiPPO per-channel |
 | **SegRNN** | `B*C` batch folding for encoding (channel embedding for decoding) |
-| **Chronos / Chronos2** | Univariate by design |
+| **Chronos / Chronos-Bolt** | Univariate by design |
 | **Sundial** | Univariate by design |
 | **TiRex** | Univariate by design |
 | **TimesFM** | Univariate by design |
@@ -435,6 +455,7 @@ Models with dedicated mechanisms for cross-variable interaction:
 | **LightTS** | `nn.Linear(enc_in, enc_in)` in layer_3 (identity-initialized) | Weak channel mixing (identity init) |
 | **TemporalFusionTransformer** | VariableSelectionNetwork (learned soft attention over variables) | Gated variable importance weighting |
 | **Moirai** | Any-Variate Attention: structured mask enables cross-variate + temporal attention | Handles arbitrary variate counts via attention masking |
+| **Chronos-2** | Group Attention: alternates Time Attn (within-series) + Group Attn (cross-series) | Multivariate + covariate support via group IDs |
 | **FreTS** | FFT along channel dimension + complex linear (when enabled) | Frequency-domain channel mixing |
 
 ### 4.4 Learned Graph Structure
@@ -473,7 +494,7 @@ Models that process the entire time series at one resolution:
 | **TemporalFusionTransformer** | LSTM + attention at original resolution |
 | **FreTS** | Single-scale frequency domain |
 | **TimeFilter** | Single patch size, graph-learned temporal structure |
-| **Chronos / Chronos2** | Single resolution (per-token / per-patch) |
+| **Chronos / Chronos-Bolt / Chronos-2** | Single resolution (per-token / per-patch) |
 | **Sundial** | Single resolution (patch-based) |
 | **TiRex** | Single resolution (patch-based) |
 | **TimeMoE** | Single resolution (patch-based) |
@@ -536,7 +557,7 @@ Models whose core operations stay in the time domain:
 **DLinear, LightTS, TiDE, TSMixer, Transformer, Reformer, Nonstationary_Transformer,
 PatchTST, PAttn, iTransformer, TimeXer, MultiPatchFormer, Crossformer, Pyraformer,
 TemporalFusionTransformer, Mamba, MambaSimple, SegRNN, SCINet, KANAD, TimeFilter,
-Chronos, Chronos2, Moirai, TimesFM, TimeMoE**
+Chronos, Chronos-Bolt, Chronos-2, Moirai, TimesFM, TimeMoE**
 
 Note: Sundial's flow matching decoder operates in a continuous latent space (noise -> forecast
 via ODE integration) but the context encoder is time-domain. TiRex uses xLSTM which is
@@ -655,7 +676,8 @@ Using only the final timestep's hidden state to generate the full horizon:
 
 | Model | Mechanism |
 |-------|-----------|
-| **Chronos2** | T5 encoder (single pass) -> prediction head outputs Student's t-distribution params (location, scale, df) per timestep |
+| **Chronos-Bolt** | T5 enc-dec (single-token decoder cross-attends to encoder) -> ResidualBlock projects to full quantile forecast in one shot |
+| **Chronos-2** | T5 encoder-only (Time+Group Attn) -> ResidualBlock projects masked future patches to 21 quantiles |
 | **Moirai** | Masked encoder (single pass) -> mixture distribution heads: Student's t / Normal / NegBin / LogNormal with 10-20 components per timestep |
 
 ### 7.8 Flow-Based Generative Output
@@ -732,7 +754,7 @@ Grouping consecutive timesteps into tokens:
 | **TimesFM** | 32 (input), {1-128} (output) | No | Asymmetric I/O patch sizes |
 | **TimeMoE** | Configurable | No | Non-overlapping |
 
-Note: Chronos/Chronos2 use per-timestep discrete tokenization, not patching.
+Note: Original Chronos uses per-timestep discrete tokenization; Chronos-Bolt and Chronos-2 use patching.
 
 ### 8.4 Residual Connection Patterns
 
@@ -752,7 +774,7 @@ Note: Chronos/Chronos2 use per-timestep discrete tokenization, not patching.
 | Causal (masked) | Bidirectional (unmasked) |
 |-----------------|------------------------|
 | Transformer (decoder), Informer (decoder), Autoformer (decoder), FEDformer (decoder), Nonstationary_Transformer (decoder), MultiPatchFormer (temporal encoder), TemporalFusionTransformer, Pyraformer (pyramid mask) | Transformer (encoder), PatchTST, PAttn, iTransformer, Crossformer, TimeXer (self-attention on patches) |
-| Chronos (T5 decoder, causal), Sundial (context encoder, causal), TiRex (xLSTM, causal), TimesFM (decoder-only, causal), TimeMoE (decoder-only+MoE, causal) | Chronos (T5 encoder, bidirectional), Chronos2 (T5 encoder-only, bidirectional), Moirai (masked encoder, structured AVA mask) |
+| Chronos (T5 decoder, causal), Sundial (context encoder, causal), TiRex (xLSTM, causal), TimesFM (decoder-only, causal), TimeMoE (decoder-only+MoE, causal) | Chronos (T5 encoder, bidirectional), Chronos-Bolt (T5 encoder, bidirectional), Chronos-2 (T5 encoder + Group Attn, bidirectional), Moirai (masked encoder, structured AVA mask) |
 
 ---
 
@@ -781,7 +803,8 @@ PAttn:              Attn-Full(patches,1L) | EncOnly | ChanIndep | SingleScale-Pa
 MultiPatchFormer:   Attn-Causal+Channel | TwoPhase | ChanIndep->ChanMix | MultiScale-4Patch | TimeDomain | SemiAutoregressive
 TFT:                LSTM+InterpAttn | EncDec | VarSelection | SingleScale | TimeDomain | GatedOutput
 Chronos:            T5-EncDec | EncDec | Univariate | SingleScale | TimeDomain | AR-TokenDecoding(categorical)
-Chronos2:           T5-EncOnly | EncOnly | Univariate | SingleScale | TimeDomain | SinglePass-StudentT
+Chronos-Bolt:       T5-EncDec(1tok) | EncDec(single-pass) | Univariate | SingleScale-Patch | TimeDomain | SinglePass-Quantile
+Chronos-2:          T5-EncOnly+GroupAttn | EncOnly | CrossVar-GroupAttn | SingleScale-Patch | TimeDomain | SinglePass-Quantile
 Moirai:             MaskedEnc+AVA | EncOnly | CrossVar-AVA | MultiPatch-MPSP | TimeDomain | SinglePass-MixtureDistrib
 Sundial:            CausalTransformer+FlowMatch | TwoComponent | Univariate | SingleScale-Patch | TimeDomain+Latent | FlowODE-Generative
 TiRex:              xLSTM(sLSTM+mLSTM) | SeqChain | Univariate | SingleScale-Patch | TimeDomain | AR-PatchDecode
@@ -890,7 +913,8 @@ graph convolution + attention.
 | KANAD | 1D-Conv+Cos | SeqChain | Independent | Single | Time | Direct-Proj |
 | TimeFilter | GCN+MoE | SeqChain | Graph-Learned | Single-Patch | Time | Direct-Proj |
 | Chronos | T5-EncDec | Enc-Dec | Univariate | Single | Time | AR-TokenDecode(categorical) |
-| Chronos2 | T5-EncOnly | Enc-Only | Univariate | Single | Time | SinglePass-StudentT |
+| Chronos-Bolt | T5-EncDec(1tok) | EncDec(single-pass) | Univariate | Patch | Time | SinglePass-Quantile |
+| Chronos-2 | T5-Enc+GroupAttn | Enc-Only | GroupAttn-CrossVar | Patch | Time | SinglePass-Quantile |
 | Moirai | MaskedEnc+AVA | Enc-Only | AVA-CrossVar | MultiPatch(MPSP) | Time | MixtureDistrib |
 | Sundial | CausalTrans+Flow | TwoComponent | Univariate | Patch | Time+Latent | FlowODE-Generative |
 | TiRex | xLSTM(s+mLSTM) | SeqChain | Univariate | Patch | Time | AR-PatchDecode |
@@ -908,10 +932,10 @@ maps (DLinear) to sophisticated multi-scale wavelet-domain mixers (WPMixer).
 
 ### 2. Channel Handling Is the Primary Structural Divide
 The most impactful architectural decision is how inter-variate relationships are modeled:
-- **6 foundation models** are strictly univariate by design (Chronos, Chronos2, Sundial, TiRex, TimesFM, TimeMoE)
+- **5 foundation models** are strictly univariate by design (Chronos, Chronos-Bolt, Sundial, TiRex, TimesFM, TimeMoE)
 - **13 non-foundation models** are strictly channel-independent
 - **13 models** mix channels only through the input embedding (Conv1d)
-- **9 models** have explicit cross-variable mechanisms (including Moirai's Any-Variate Attention)
+- **10 models** have explicit cross-variable mechanisms (including Moirai's AVA and Chronos-2's Group Attention)
 - **2 models** learn graph structure between variables
 - **2 models** are configurable
 
@@ -939,8 +963,8 @@ Despite diverse naming and marketing, 5 of 7 foundation models share the same hi
 pattern: **patch input -> causal backbone -> next-patch prediction**. They diverge primarily in:
 - Backbone choice: Transformer (TimesFM, TimeMoE), xLSTM (TiRex)
 - Scaling strategy: Dense (TimesFM, TiRex) vs. Sparse MoE (TimeMoE)
-- Output distribution: Point prediction (TimesFM v1), Student's t (Chronos2), Mixture
-  (Moirai), Flow-based (Sundial), Categorical over bins (Chronos)
+- Output distribution: Point prediction (TimesFM v1), Quantile (Chronos-Bolt, Chronos-2),
+  Mixture (Moirai), Flow-based (Sundial), Categorical over bins (Chronos)
 
 ### 7. Structural Simplicity Can Match Complexity
 The simplest models (DLinear: 2 linear layers; PAttn: 1 attention layer) remain competitive
